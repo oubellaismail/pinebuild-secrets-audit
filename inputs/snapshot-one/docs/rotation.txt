@@ -1,0 +1,2 @@
+Rotation draft: old token DEMO_REVOKED_OLD_456 was revoked in this fixture.
+New value is stored elsewhere; inventory is authoritative.

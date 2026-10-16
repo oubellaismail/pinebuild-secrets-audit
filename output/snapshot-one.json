@@ -1,0 +1,155 @@
+{
+  "report_schema": "pinebuild-audit/1",
+  "snapshot": "inputs/snapshot-one",
+  "scanned_files": [
+    "app/env.txt",
+    "build/report.txt",
+    "docs/rotation.txt",
+    "tests/mock.txt"
+  ],
+  "workflows": [
+    "pr-build",
+    "release"
+  ],
+  "sensitive_paths": [
+    "app/env.txt",
+    "docs/rotation.txt"
+  ],
+  "summary": {
+    "findings": 5,
+    "findings_by_rule": {
+      "S1": 1,
+      "S2": 1,
+      "S3": 1,
+      "S4": 1,
+      "S5": 1
+    },
+    "benign_decisions": 4,
+    "unresolved_refs": 0
+  },
+  "findings": [
+    {
+      "rule_id": "S1",
+      "kind": "text",
+      "path": "app/env.txt",
+      "line": 2,
+      "token_id": "release-active",
+      "token_state": "active_in_fixture",
+      "evidence": "RELEASE_TOKEN=[REDACTED:release-active]",
+      "rationale": "Token 'release-active' is active_in_fixture and appears in plaintext; filename or directory does not exempt it.",
+      "next_action": "Remove the value from app/env.txt:2 (and git history), then rotate 'release-active' because it has been exposed.",
+      "location": "app/env.txt:2"
+    },
+    {
+      "rule_id": "S2",
+      "kind": "ci",
+      "workflow_id": "pr-build",
+      "evidence": {
+        "runs_untrusted_code": true,
+        "trigger": "pull_request",
+        "active_secret_refs": [
+          "release-active"
+        ]
+      },
+      "rationale": "Workflow runs untrusted code while active secrets are available to it. This is unsafe availability; it does not prove the secret was exfiltrated.",
+      "next_action": "Remove release-active from 'pr-build' or stop running untrusted code in it; move secret use to a trusted (tag) workflow.",
+      "location": "workflow:pr-build"
+    },
+    {
+      "rule_id": "S3",
+      "kind": "ci",
+      "workflow_id": "pr-build",
+      "evidence": {
+        "permissions": "write-all",
+        "trigger": "pull_request",
+        "runs_untrusted_code": true
+      },
+      "rationale": "Permissions exceed policy: write-all is never permitted.",
+      "next_action": "Set 'pr-build' permissions to read-only.",
+      "location": "workflow:pr-build"
+    },
+    {
+      "rule_id": "S4",
+      "kind": "ci",
+      "workflow_id": "pr-build",
+      "evidence": {
+        "log_environment": true,
+        "active_secret_refs": [
+          "release-active"
+        ]
+      },
+      "rationale": "Full environment logging would write the active secret values into build logs.",
+      "next_action": "Set log_environment=false on 'pr-build'; log only named non-secret variables.",
+      "location": "workflow:pr-build"
+    },
+    {
+      "rule_id": "S5",
+      "kind": "ci",
+      "workflow_id": "pr-build",
+      "evidence": {
+        "artifact_pattern": "app/env.txt",
+        "matches_sensitive": [
+          "app/env.txt"
+        ]
+      },
+      "rationale": "Artifact pattern 'app/env.txt' publishes sensitive file(s) app/env.txt. Unsafe even if the token currently inside is revoked: future values would be published.",
+      "next_action": "Replace 'app/env.txt' in 'pr-build' with explicit non-sensitive paths (e.g. build/report.txt).",
+      "location": "workflow:pr-build"
+    }
+  ],
+  "benign_decisions": [
+    {
+      "rule_id": "S1",
+      "kind": "text",
+      "path": "docs/rotation.txt",
+      "line": 1,
+      "token_id": "old-docs",
+      "token_state": "revoked_in_fixture",
+      "evidence": "Rotation draft: old token [REDACTED:old-docs] was revoked in this fixture.",
+      "rationale": "Token 'old-docs' is revoked_in_fixture; it does not represent a current credential exposure, so S1 is suppressed.",
+      "next_action": "None required; optionally tidy the marker.",
+      "location": "docs/rotation.txt:1"
+    },
+    {
+      "rule_id": "S1",
+      "kind": "text",
+      "path": "tests/mock.txt",
+      "line": 2,
+      "token_id": "local-test",
+      "token_state": "test_only",
+      "evidence": "API_TOKEN=[REDACTED:local-test]",
+      "rationale": "Token 'local-test' is test_only; it does not represent a current credential exposure, so S1 is suppressed.",
+      "next_action": "None required; optionally tidy the marker.",
+      "location": "tests/mock.txt:2"
+    },
+    {
+      "rule_id": "S3",
+      "kind": "ci",
+      "workflow_id": "release",
+      "evidence": {
+        "permissions": "release-write",
+        "trigger": "tag",
+        "runs_untrusted_code": false
+      },
+      "rationale": "release-write is the policy exception for trigger=tag with no untrusted code.",
+      "next_action": "None required.",
+      "location": "workflow:release"
+    },
+    {
+      "rule_id": "S2/S4",
+      "kind": "ci",
+      "workflow_id": "release",
+      "evidence": {
+        "active_secret_refs": [
+          "release-active"
+        ],
+        "runs_untrusted_code": false,
+        "log_environment": false
+      },
+      "rationale": "Active secret is used by a trusted workflow that does not log the environment.",
+      "next_action": "None required.",
+      "location": "workflow:release"
+    }
+  ],
+  "unresolved_refs": []
+}

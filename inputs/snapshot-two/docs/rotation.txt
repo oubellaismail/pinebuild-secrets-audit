@@ -1,0 +1,2 @@
+Rotation complete: DEMO_ACTIVE_RELEASE_7C2 is revoked in this fixture.
+Temporary troubleshooting copy: DEMO_ACTIVE_ROTATED_9D4

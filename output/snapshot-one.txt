@@ -1,0 +1,44 @@
+PineBuild secrets/CI audit: inputs/snapshot-one
+Scanned files: app/env.txt, build/report.txt, docs/rotation.txt, tests/mock.txt
+Workflows: pr-build, release
+Sensitive paths (S5): app/env.txt, docs/rotation.txt
+Result: 5 findings (S1:1 S2:1 S3:1 S4:1 S5:1), 4 benign decisions, 0 unresolved refs
+
+FINDINGS
+[S1] app/env.txt:2  token_id=release-active (active_in_fixture)
+    evidence: RELEASE_TOKEN=[REDACTED:release-active]
+    why:      Token 'release-active' is active_in_fixture and appears in plaintext; filename or directory does not exempt it.
+    next:     Remove the value from app/env.txt:2 (and git history), then rotate 'release-active' because it has been exposed.
+[S2] workflow:pr-build
+    evidence: runs_untrusted_code=True; trigger=pull_request; active_secret_refs=release-active
+    why:      Workflow runs untrusted code while active secrets are available to it. This is unsafe availability; it does not prove the secret was exfiltrated.
+    next:     Remove release-active from 'pr-build' or stop running untrusted code in it; move secret use to a trusted (tag) workflow.
+[S3] workflow:pr-build
+    evidence: permissions=write-all; trigger=pull_request; runs_untrusted_code=True
+    why:      Permissions exceed policy: write-all is never permitted.
+    next:     Set 'pr-build' permissions to read-only.
+[S4] workflow:pr-build
+    evidence: log_environment=True; active_secret_refs=release-active
+    why:      Full environment logging would write the active secret values into build logs.
+    next:     Set log_environment=false on 'pr-build'; log only named non-secret variables.
+[S5] workflow:pr-build
+    evidence: artifact_pattern=app/env.txt; matches_sensitive=app/env.txt
+    why:      Artifact pattern 'app/env.txt' publishes sensitive file(s) app/env.txt. Unsafe even if the token currently inside is revoked: future values would be published.
+    next:     Replace 'app/env.txt' in 'pr-build' with explicit non-sensitive paths (e.g. build/report.txt).
+
+BENIGN DECISIONS (seen and deliberately not flagged)
+[S1] docs/rotation.txt:1  token_id=old-docs (revoked_in_fixture)
+    evidence: Rotation draft: old token [REDACTED:old-docs] was revoked in this fixture.
+    why:      Token 'old-docs' is revoked_in_fixture; it does not represent a current credential exposure, so S1 is suppressed.
+[S1] tests/mock.txt:2  token_id=local-test (test_only)
+    evidence: API_TOKEN=[REDACTED:local-test]
+    why:      Token 'local-test' is test_only; it does not represent a current credential exposure, so S1 is suppressed.
+[S3] workflow:release
+    evidence: permissions=release-write; trigger=tag; runs_untrusted_code=False
+    why:      release-write is the policy exception for trigger=tag with no untrusted code.
+[S2/S4] workflow:release
+    evidence: active_secret_refs=release-active; runs_untrusted_code=False; log_environment=False
+    why:      Active secret is used by a trusted workflow that does not log the environment.
+
+UNRESOLVED SECRET REFS
+  none

@@ -1,0 +1,5 @@
+CAUGHT  S3 ignores runs_untrusted_code: FAILED (failures=1)
+CAUGHT  S1 flags every state: FAILED (failures=4)
+CAUGHT  S5 exact match only (no wildcard): FAILED (failures=4)
+CAUGHT  S2 counts revoked refs: FAILED (failures=2)
+CAUGHT  redaction disabled: FAILED (failures=2, errors=2)

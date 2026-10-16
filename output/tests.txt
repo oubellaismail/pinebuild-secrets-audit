@@ -1,0 +1,24 @@
+test_active_token_in_test_file_is_finding_with_line_and_redaction (test_audit.TestS1ActiveTextDetection.test_active_token_in_test_file_is_finding_with_line_and_redaction) ... ok
+test_inventory_and_unscanned_dirs_are_not_findings (test_audit.TestS1ActiveTextDetection.test_inventory_and_unscanned_dirs_are_not_findings) ... ok
+test_unknown_token_state_is_treated_as_sensitive (test_audit.TestS1ActiveTextDetection.test_unknown_token_state_is_treated_as_sensitive) ... ok
+test_same_line_mixed_states_only_flags_active (test_audit.TestS1TestAndRevokedSuppression.test_same_line_mixed_states_only_flags_active) ... ok
+test_test_and_revoked_tokens_are_benign_not_findings (test_audit.TestS1TestAndRevokedSuppression.test_test_and_revoked_tokens_are_benign_not_findings) ... ok
+test_value_containing_another_value_matches_longer_only (test_audit.TestS1TestAndRevokedSuppression.test_value_containing_another_value_matches_longer_only) ... ok
+test_env_logging_with_active_secret_is_s4_even_when_trusted (test_audit.TestS2S4SecretIntersection.test_env_logging_with_active_secret_is_s4_even_when_trusted) ... ok
+test_trusted_with_active_secret_is_not_s2 (test_audit.TestS2S4SecretIntersection.test_trusted_with_active_secret_is_not_s2) ... ok
+test_unknown_ref_is_unresolved_not_invented (test_audit.TestS2S4SecretIntersection.test_unknown_ref_is_unresolved_not_invented) ... ok
+test_untrusted_with_active_secret_is_s2 (test_audit.TestS2S4SecretIntersection.test_untrusted_with_active_secret_is_s2) ... ok
+test_untrusted_with_revoked_secret_is_not_s2 (test_audit.TestS2S4SecretIntersection.test_untrusted_with_revoked_secret_is_not_s2) ... ok
+test_exact_policy_table (test_audit.TestS3PermissionTriggerPolicy.test_exact_policy_table) ... ok
+test_pattern_for_file_not_supplied_does_not_match (test_audit.TestS5ArtifactWildcardExpansion.test_pattern_for_file_not_supplied_does_not_match) ... ok
+test_s5_fires_with_no_tokens_at_all (test_audit.TestS5ArtifactWildcardExpansion.test_s5_fires_with_no_tokens_at_all) ... ok
+test_sensitive_paths_are_configurable (test_audit.TestS5ArtifactWildcardExpansion.test_sensitive_paths_are_configurable) ... ok
+test_wildcards_expand_to_sensitive_files (test_audit.TestS5ArtifactWildcardExpansion.test_wildcards_expand_to_sensitive_files) ... ok
+test_cli_output_never_contains_token_values (test_audit.TestSuppliedSnapshots.test_cli_output_never_contains_token_values) ... ok
+test_snapshot_one (test_audit.TestSuppliedSnapshots.test_snapshot_one) ... ok
+test_snapshot_two_rotation_did_not_fix_everything (test_audit.TestSuppliedSnapshots.test_snapshot_two_rotation_did_not_fix_everything) ... ok
+
+----------------------------------------------------------------------
+Ran 19 tests in 0.050s
+
+OK

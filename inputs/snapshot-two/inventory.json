@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "tokens": [
+    {
+      "token_id": "release-active",
+      "value": "DEMO_ACTIVE_RELEASE_7C2",
+      "state": "revoked_in_fixture"
+    },
+    {
+      "token_id": "release-rotated",
+      "value": "DEMO_ACTIVE_ROTATED_9D4",
+      "state": "active_in_fixture"
+    },
+    {
+      "token_id": "local-test",
+      "value": "DEMO_TEST_LOCAL_123",
+      "state": "test_only"
+    },
+    {
+      "token_id": "old-docs",
+      "value": "DEMO_REVOKED_OLD_456",
+      "state": "revoked_in_fixture"
+    }
+  ]
+}

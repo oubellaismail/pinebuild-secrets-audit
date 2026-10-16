@@ -1,0 +1,31 @@
+{
+  "workflows": [
+    {
+      "workflow_id": "pr-build",
+      "trigger": "pull_request",
+      "runs_untrusted_code": true,
+      "secret_refs": [
+        "release-active"
+      ],
+      "permissions": "write-all",
+      "log_environment": true,
+      "artifact_paths": [
+        "app/env.txt",
+        "build/report.txt"
+      ]
+    },
+    {
+      "workflow_id": "release",
+      "trigger": "tag",
+      "runs_untrusted_code": false,
+      "secret_refs": [
+        "release-active"
+      ],
+      "permissions": "release-write",
+      "log_environment": false,
+      "artifact_paths": [
+        "build/report.txt"
+      ]
+    }
+  ]
+}

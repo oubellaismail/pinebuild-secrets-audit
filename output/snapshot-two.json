@@ -1,0 +1,122 @@
+{
+  "report_schema": "pinebuild-audit/1",
+  "snapshot": "inputs/snapshot-two",
+  "scanned_files": [
+    "app/env.txt",
+    "build/report.txt",
+    "docs/rotation.txt",
+    "tests/mock.txt"
+  ],
+  "workflows": [
+    "pr-build",
+    "release"
+  ],
+  "sensitive_paths": [
+    "app/env.txt",
+    "docs/rotation.txt"
+  ],
+  "summary": {
+    "findings": 2,
+    "findings_by_rule": {
+      "S1": 1,
+      "S5": 1
+    },
+    "benign_decisions": 5,
+    "unresolved_refs": 0
+  },
+  "findings": [
+    {
+      "rule_id": "S1",
+      "kind": "text",
+      "path": "docs/rotation.txt",
+      "line": 2,
+      "token_id": "release-rotated",
+      "token_state": "active_in_fixture",
+      "evidence": "Temporary troubleshooting copy: [REDACTED:release-rotated]",
+      "rationale": "Token 'release-rotated' is active_in_fixture and appears in plaintext; filename or directory does not exempt it.",
+      "next_action": "Remove the value from docs/rotation.txt:2 (and git history), then rotate 'release-rotated' because it has been exposed.",
+      "location": "docs/rotation.txt:2"
+    },
+    {
+      "rule_id": "S5",
+      "kind": "ci",
+      "workflow_id": "pr-build",
+      "evidence": {
+        "artifact_pattern": "app/*",
+        "matches_sensitive": [
+          "app/env.txt"
+        ]
+      },
+      "rationale": "Artifact pattern 'app/*' publishes sensitive file(s) app/env.txt. Unsafe even if the token currently inside is revoked: future values would be published.",
+      "next_action": "Replace 'app/*' in 'pr-build' with explicit non-sensitive paths (e.g. build/report.txt).",
+      "location": "workflow:pr-build"
+    }
+  ],
+  "benign_decisions": [
+    {
+      "rule_id": "S1",
+      "kind": "text",
+      "path": "app/env.txt",
+      "line": 2,
+      "token_id": "release-active",
+      "token_state": "revoked_in_fixture",
+      "evidence": "RELEASE_TOKEN=[REDACTED:release-active]",
+      "rationale": "Token 'release-active' is revoked_in_fixture; it does not represent a current credential exposure, so S1 is suppressed.",
+      "next_action": "None required; optionally tidy the marker.",
+      "location": "app/env.txt:2"
+    },
+    {
+      "rule_id": "S1",
+      "kind": "text",
+      "path": "docs/rotation.txt",
+      "line": 1,
+      "token_id": "release-active",
+      "token_state": "revoked_in_fixture",
+      "evidence": "Rotation complete: [REDACTED:release-active] is revoked in this fixture.",
+      "rationale": "Token 'release-active' is revoked_in_fixture; it does not represent a current credential exposure, so S1 is suppressed.",
+      "next_action": "None required; optionally tidy the marker.",
+      "location": "docs/rotation.txt:1"
+    },
+    {
+      "rule_id": "S1",
+      "kind": "text",
+      "path": "tests/mock.txt",
+      "line": 2,
+      "token_id": "local-test",
+      "token_state": "test_only",
+      "evidence": "API_TOKEN=[REDACTED:local-test]",
+      "rationale": "Token 'local-test' is test_only; it does not represent a current credential exposure, so S1 is suppressed.",
+      "next_action": "None required; optionally tidy the marker.",
+      "location": "tests/mock.txt:2"
+    },
+    {
+      "rule_id": "S3",
+      "kind": "ci",
+      "workflow_id": "release",
+      "evidence": {
+        "permissions": "release-write",
+        "trigger": "tag",
+        "runs_untrusted_code": false
+      },
+      "rationale": "release-write is the policy exception for trigger=tag with no untrusted code.",
+      "next_action": "None required.",
+      "location": "workflow:release"
+    },
+    {
+      "rule_id": "S2/S4",
+      "kind": "ci",
+      "workflow_id": "release",
+      "evidence": {
+        "active_secret_refs": [
+          "release-rotated"
+        ],
+        "runs_untrusted_code": false,
+        "log_environment": false
+      },
+      "rationale": "Active secret is used by a trusted workflow that does not log the environment.",
+      "next_action": "None required.",
+      "location": "workflow:release"
+    }
+  ],
+  "unresolved_refs": []
+}
