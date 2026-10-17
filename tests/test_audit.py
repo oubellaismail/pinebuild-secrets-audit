@@ -98,6 +98,31 @@ class TestS1ActiveTextDetection(SnapshotCase):
         )
         self.assertEqual(self.keys(report["findings"]), {("S1", "docs/a.txt:1")})
 
+    def test_dotfile_is_scanned_but_os_metadata_is_not(self):
+        report = self.run_audit(
+            {"live": ("DEMO_ACTIVE_X1", ACTIVE)},
+            [workflow()],
+            {"app/.env": "KEY=DEMO_ACTIVE_X1\n", "app/.DS_Store": "DEMO_ACTIVE_X1\n"},
+        )
+        self.assertEqual(self.keys(report["findings"]), {("S1", "app/.env:1")})
+        self.assertNotIn("app/.DS_Store", report["scanned_files"])
+
+    def test_blank_inventory_value_is_warning_not_match(self):
+        report = self.run_audit(
+            {"blank": ("  ", ACTIVE), "live": ("DEMO_ACTIVE_X1", ACTIVE)},
+            [workflow()],
+            {"app/a.txt": "hello world\nKEY=DEMO_ACTIVE_X1\n"},
+        )
+        self.assertEqual(self.keys(report["findings"]), {("S1", "app/a.txt:2")})
+        self.assertEqual(report["findings"][0]["evidence"], "KEY=[REDACTED:live]")
+        self.assertEqual([w["token_id"] for w in report["inventory_warnings"]], ["blank"])
+
+    def test_next_action_rotates_before_cleanup(self):
+        report = self.run_audit(
+            {"live": ("DEMO_ACTIVE_X1", ACTIVE)}, [workflow()], {"docs/n.txt": "DEMO_ACTIVE_X1\n"})
+        action = report["findings"][0]["next_action"]
+        self.assertLess(action.index("Rotate"), action.index("remove"))
+
 
 class TestS1TestAndRevokedSuppression(SnapshotCase):
     def test_test_and_revoked_tokens_are_benign_not_findings(self):
@@ -260,6 +285,21 @@ class TestSuppliedSnapshots(unittest.TestCase):
                     written = out.read_text()
                 self.assertEqual(code, 0)
                 self.assertNotIn("DEMO_", buf.getvalue() + written)
+
+    def test_cli_handles_blank_inventory_value(self):
+        # The output safety net must not treat a blank value as "found everywhere".
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "inventory.json").write_text(json.dumps({"tokens": [
+                {"token_id": "blank", "value": "", "state": ACTIVE}]}))
+            (root / "ci.json").write_text(json.dumps({"workflows": []}))
+            (root / "app").mkdir()
+            (root / "app" / "a.txt").write_text("hello\n")
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                code = audit.main([str(root)])
+        self.assertEqual(code, 0)
+        self.assertIn("token_id=blank", buf.getvalue())
 
 
 if __name__ == "__main__":

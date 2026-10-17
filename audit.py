@@ -16,6 +16,10 @@ from pathlib import Path
 # The four content directories the policy allows us to text-scan.
 SCANNED_DIRS = ("app", "tests", "docs", "build")
 
+# OS metadata files that are never content. Other dotfiles (e.g. app/.env)
+# are scanned: they are a common place for real secrets.
+SKIPPED_FILENAMES = (".DS_Store", "Thumbs.db")
+
 # S5 sensitive files from the policy; override with --sensitive-path.
 DEFAULT_SENSITIVE_PATHS = ("app/env.txt", "docs/rotation.txt")
 
@@ -52,7 +56,7 @@ def list_content_files(snapshot: Path) -> list:
         if not base.is_dir():
             continue
         for path in base.rglob("*"):
-            if path.is_file() and not path.name.startswith("."):
+            if path.is_file() and path.name not in SKIPPED_FILENAMES:
                 files.append(path.relative_to(snapshot).as_posix())
     return sorted(files)
 
@@ -60,8 +64,27 @@ def list_content_files(snapshot: Path) -> list:
 def values_longest_first(tokens: dict) -> list:
     """(value, token_id) pairs, longest value first so a value that contains
     another value is matched (and redacted) as the longer one."""
-    pairs = [(info["value"], token_id) for token_id, info in tokens.items()]
+    pairs = [(info["value"], token_id) for token_id, info in tokens.items()
+             if info["value"].strip()]
     return sorted(pairs, key=lambda p: len(p[0]), reverse=True)
+
+
+def inventory_warnings(tokens: dict) -> list:
+    """Inventory entries that cannot be matched safely (blank value).
+
+    A blank value would match every line, so it is excluded from S1 and
+    reported here instead of producing noise."""
+    return [
+        {
+            "kind": "inventory_warning",
+            "token_id": token_id,
+            "token_state": info["state"],
+            "issue": "blank value; cannot be matched in content, S1 skipped for this token.",
+            "next_action": "Fix the inventory entry so it holds the exact token value.",
+        }
+        for token_id, info in tokens.items()
+        if not info["value"].strip()
+    ]
 
 
 def redact(text: str, tokens: dict) -> str:
@@ -105,8 +128,8 @@ def scan_text(snapshot: Path, tokens: dict, files: list) -> tuple:
                         "filename or directory does not exempt it."
                     )
                     record["next_action"] = (
-                        f"Remove the value from {rel_path}:{line_no} (and git history), "
-                        f"then rotate '{token_id}' because it has been exposed."
+                        f"Rotate '{token_id}' now (the exposed value must be treated as "
+                        f"compromised), then remove it from {rel_path}:{line_no} and git history."
                     )
                     findings.append(record)
                 else:
@@ -270,6 +293,7 @@ def audit(snapshot: Path, sensitive_paths: tuple = DEFAULT_SENSITIVE_PATHS) -> d
     workflows = load_workflows(snapshot)
     files = list_content_files(snapshot)
 
+    warnings = inventory_warnings(tokens)
     text_findings, text_benign = scan_text(snapshot, tokens, files)
     ci_findings, ci_benign, unresolved = check_ci(workflows, tokens, files, sensitive_paths)
 
@@ -293,17 +317,19 @@ def audit(snapshot: Path, sensitive_paths: tuple = DEFAULT_SENSITIVE_PATHS) -> d
             "findings_by_rule": dict(sorted(by_rule.items())),
             "benign_decisions": len(benign),
             "unresolved_refs": len(unresolved),
+            "inventory_warnings": len(warnings),
         },
         "findings": findings,
         "benign_decisions": benign,
         "unresolved_refs": unresolved,
+        "inventory_warnings": warnings,
     }
 
 
 def assert_no_token_values(serialized: str, snapshot: Path) -> None:
     """Safety net: refuse to emit output that contains any full token value."""
     for token_id, info in load_inventory(snapshot).items():
-        if info["value"] in serialized:
+        if info["value"].strip() and info["value"] in serialized:
             raise RuntimeError(f"refusing to output unredacted value of '{token_id}'")
 
 
@@ -327,7 +353,8 @@ def format_summary(report: dict) -> str:
         f"Workflows: {', '.join(report['workflows'])}",
         f"Sensitive paths (S5): {', '.join(report['sensitive_paths'])}",
         f"Result: {s['findings']} findings ({by_rule}), "
-        f"{s['benign_decisions']} benign decisions, {s['unresolved_refs']} unresolved refs",
+        f"{s['benign_decisions']} benign decisions, {s['unresolved_refs']} unresolved refs, "
+        f"{s['inventory_warnings']} inventory warnings",
         "",
         "FINDINGS",
     ]
@@ -356,6 +383,11 @@ def format_summary(report: dict) -> str:
     for record in report["unresolved_refs"]:
         lines.append(f"  workflow:{record['workflow_id']}  ref={record['secret_ref']}  {record['rationale']}")
     if not report["unresolved_refs"]:
+        lines.append("  none")
+    lines += ["", "INVENTORY WARNINGS"]
+    for record in report["inventory_warnings"]:
+        lines.append(f"  token_id={record['token_id']} ({record['token_state']})  {record['issue']}")
+    if not report["inventory_warnings"]:
         lines.append("  none")
     return "\n".join(lines) + "\n"
 

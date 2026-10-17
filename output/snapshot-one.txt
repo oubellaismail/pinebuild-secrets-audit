@@ -2,13 +2,13 @@ PineBuild secrets/CI audit: inputs/snapshot-one
 Scanned files: app/env.txt, build/report.txt, docs/rotation.txt, tests/mock.txt
 Workflows: pr-build, release
 Sensitive paths (S5): app/env.txt, docs/rotation.txt
-Result: 5 findings (S1:1 S2:1 S3:1 S4:1 S5:1), 4 benign decisions, 0 unresolved refs
+Result: 5 findings (S1:1 S2:1 S3:1 S4:1 S5:1), 4 benign decisions, 0 unresolved refs, 0 inventory warnings
 
 FINDINGS
 [S1] app/env.txt:2  token_id=release-active (active_in_fixture)
     evidence: RELEASE_TOKEN=[REDACTED:release-active]
     why:      Token 'release-active' is active_in_fixture and appears in plaintext; filename or directory does not exempt it.
-    next:     Remove the value from app/env.txt:2 (and git history), then rotate 'release-active' because it has been exposed.
+    next:     Rotate 'release-active' now (the exposed value must be treated as compromised), then remove it from app/env.txt:2 and git history.
 [S2] workflow:pr-build
     evidence: runs_untrusted_code=True; trigger=pull_request; active_secret_refs=release-active
     why:      Workflow runs untrusted code while active secrets are available to it. This is unsafe availability; it does not prove the secret was exfiltrated.
@@ -41,4 +41,7 @@ BENIGN DECISIONS (seen and deliberately not flagged)
     why:      Active secret is used by a trusted workflow that does not log the environment.
 
 UNRESOLVED SECRET REFS
+  none
+
+INVENTORY WARNINGS
   none

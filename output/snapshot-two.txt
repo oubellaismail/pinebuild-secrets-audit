@@ -2,13 +2,13 @@ PineBuild secrets/CI audit: inputs/snapshot-two
 Scanned files: app/env.txt, build/report.txt, docs/rotation.txt, tests/mock.txt
 Workflows: pr-build, release
 Sensitive paths (S5): app/env.txt, docs/rotation.txt
-Result: 2 findings (S1:1 S5:1), 5 benign decisions, 0 unresolved refs
+Result: 2 findings (S1:1 S5:1), 5 benign decisions, 0 unresolved refs, 0 inventory warnings
 
 FINDINGS
 [S1] docs/rotation.txt:2  token_id=release-rotated (active_in_fixture)
     evidence: Temporary troubleshooting copy: [REDACTED:release-rotated]
     why:      Token 'release-rotated' is active_in_fixture and appears in plaintext; filename or directory does not exempt it.
-    next:     Remove the value from docs/rotation.txt:2 (and git history), then rotate 'release-rotated' because it has been exposed.
+    next:     Rotate 'release-rotated' now (the exposed value must be treated as compromised), then remove it from docs/rotation.txt:2 and git history.
 [S5] workflow:pr-build
     evidence: artifact_pattern=app/*; matches_sensitive=app/env.txt
     why:      Artifact pattern 'app/*' publishes sensitive file(s) app/env.txt. Unsafe even if the token currently inside is revoked: future values would be published.
@@ -32,4 +32,7 @@ BENIGN DECISIONS (seen and deliberately not flagged)
     why:      Active secret is used by a trusted workflow that does not log the environment.
 
 UNRESOLVED SECRET REFS
+  none
+
+INVENTORY WARNINGS
   none

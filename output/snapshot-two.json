@@ -22,7 +22,8 @@
       "S5": 1
     },
     "benign_decisions": 5,
-    "unresolved_refs": 0
+    "unresolved_refs": 0,
+    "inventory_warnings": 0
   },
   "findings": [
     {
@@ -34,7 +35,7 @@
       "token_state": "active_in_fixture",
       "evidence": "Temporary troubleshooting copy: [REDACTED:release-rotated]",
       "rationale": "Token 'release-rotated' is active_in_fixture and appears in plaintext; filename or directory does not exempt it.",
-      "next_action": "Remove the value from docs/rotation.txt:2 (and git history), then rotate 'release-rotated' because it has been exposed.",
+      "next_action": "Rotate 'release-rotated' now (the exposed value must be treated as compromised), then remove it from docs/rotation.txt:2 and git history.",
       "location": "docs/rotation.txt:2"
     },
     {
@@ -118,5 +119,6 @@
       "location": "workflow:release"
     }
   ],
-  "unresolved_refs": []
+  "unresolved_refs": [],
+  "inventory_warnings": []
 }

@@ -8,8 +8,10 @@ Capacity (from policy): the team can **change one workflow immediately** and **s
 
 | Rank | Lane | Action | Closes | Why this rank |
 |---|---|---|---|---|
-| **1** | Scheduled repo cleanup (first slot) | Delete the "temporary troubleshooting copy" at `docs/rotation.txt:2` (and purge it from history), then rotate `release-rotated` and store the new value only in the CI secret store. | S1 `docs/rotation.txt:2` | This is the **only active credential currently exposed**, and it is the release secret used by a `release-write` workflow. Anyone who can read the repo has it. Rotation must come **after** removing the copy and fixing the habit, otherwise the next value can land in the same note. |
+| **1** | Rotate now, then scheduled repo cleanup (first slot) | **First** rotate `release-rotated` in the secret store and point `release` at the new value (stored only there). **Then**, in the cleanup slot, delete the "temporary troubleshooting copy" at `docs/rotation.txt:2` and purge it from history. | S1 `docs/rotation.txt:2` | This is the **only active credential currently exposed**, and it is the release secret used by a `release-write` workflow. Anyone who can read the repo has it. Deleting the line does not un-expose it (history, clones, forks), so containment comes first: once rotated, the leaked value is dead and the cleanup is no longer racing an attacker. |
 | **2** | Immediate workflow change | In `pr-build`, replace `artifact_paths: ["app/*", ...]` with the explicit `["build/report.txt"]`. | S5 `workflow:pr-build` | `app/*` still expands to `app/env.txt`. Today that file holds a revoked value, so nothing live is published, but the next real value written there would be published by a job anyone can trigger with a pull request. It is ranked below #1 because it is a leak *path*, not a live leak, but it is done **today** because the workflow lane is free and the change is one line. |
+
+**Assumption:** rotating a secret is a secret-store operation, not a workflow change or a repository cleanup, so it is not limited by the two capacity lanes. If the team cannot rotate immediately either, rank 1 still comes first and rotation happens at the cleanup slot, before the file edit.
 
 The two actions use different lanes, so doing #2 now does not delay #1. After both, a rerun of the auditor on the changed snapshot should report 0 findings (the old revoked value in `app/env.txt:2` stays a benign decision; removing it is optional hygiene).
 
@@ -18,7 +20,7 @@ The two actions use different lanes, so doing #2 now does not delay #1. After bo
 | Rank | Lane | Action | Closes |
 |---|---|---|---|
 | **1** | Immediate workflow change | Lock down `pr-build`: `secret_refs: []`, `permissions: read-only`, `log_environment: false`, `artifact_paths: ["build/report.txt"]`. | S2, S3, S4, S5 on `workflow:pr-build` |
-| **2** | Scheduled repo cleanup | Remove `RELEASE_TOKEN` from `app/env.txt:2`, then rotate `release-active`. | S1 `app/env.txt:2` |
+| **2** | Rotate now, then scheduled repo cleanup | Rotate `release-active` first, then remove `RELEASE_TOKEN` from `app/env.txt:2` and history. | S1 `app/env.txt:2` |
 
 Here the workflow comes first: one change closes four rules on a job that runs untrusted pull-request code with the active release secret, `write-all`, environment logging and publication of the file containing that secret. These are unsafe configurations; the data does not show that anyone exploited them.
 

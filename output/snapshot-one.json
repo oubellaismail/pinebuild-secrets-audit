@@ -25,7 +25,8 @@
       "S5": 1
     },
     "benign_decisions": 4,
-    "unresolved_refs": 0
+    "unresolved_refs": 0,
+    "inventory_warnings": 0
   },
   "findings": [
     {
@@ -37,7 +38,7 @@
       "token_state": "active_in_fixture",
       "evidence": "RELEASE_TOKEN=[REDACTED:release-active]",
       "rationale": "Token 'release-active' is active_in_fixture and appears in plaintext; filename or directory does not exempt it.",
-      "next_action": "Remove the value from app/env.txt:2 (and git history), then rotate 'release-active' because it has been exposed.",
+      "next_action": "Rotate 'release-active' now (the exposed value must be treated as compromised), then remove it from app/env.txt:2 and git history.",
       "location": "app/env.txt:2"
     },
     {
@@ -151,5 +152,6 @@
       "location": "workflow:release"
     }
   ],
-  "unresolved_refs": []
+  "unresolved_refs": [],
+  "inventory_warnings": []
 }

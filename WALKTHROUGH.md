@@ -6,7 +6,7 @@ Text walkthrough (in place of a recording), about five minutes to read.
 
 `audit.py` is an offline auditor. It reads one snapshot directory and applies the policy rules S1–S5 from [inputs/policy.md](inputs/policy.md). It writes:
 
-- a **machine-readable JSON report** (findings, benign decisions, unresolved refs), and
+- a **machine-readable JSON report** (findings, benign decisions, unresolved refs, inventory warnings), and
 - a **readable summary** on stdout and optionally to a file.
 
 It uses the Python standard library only. It never contacts a network and never prints a full token value: evidence shows `[REDACTED:<token_id>]`.
@@ -32,7 +32,7 @@ python3 audit.py inputs/snapshot-one --json output/snapshot-one.json --summary o
 python3 audit.py inputs/snapshot-two --json output/snapshot-two.json --summary output/snapshot-two.txt
 ```
 
-Tests (19 decision checks):
+Tests (23 decision checks):
 
 ```bash
 python3 -m unittest discover -s tests -v
@@ -59,7 +59,7 @@ Output is reproducible: no timestamps, stable ordering. Rerunning produces byte-
 
 | Rule | Input | Logic |
 |---|---|---|
-| S1 | Text of every file under `app/`, `tests/`, `docs/`, `build/` | Exact match of each inventory value, line by line, longest value first. Active (or unknown) state → finding. `revoked_in_fixture` / `test_only` → benign decision. Filename is never an exemption. `inventory.json` is not scanned. |
+| S1 | Text of every file under `app/`, `tests/`, `docs/`, `build/`, including dotfiles such as `app/.env` (only OS metadata like `.DS_Store` is skipped) | Exact match of each inventory value, line by line, longest value first. Active (or unknown) state → finding. `revoked_in_fixture` / `test_only` → benign decision. Filename is never an exemption. `inventory.json` is not scanned. An inventory entry with a blank value is not matched (it would match every line) and is reported under **inventory warnings**. |
 | S2 | `ci.json` | `runs_untrusted_code is True` and at least one `secret_ref` resolves to an active token |
 | S3 | `ci.json` | `read-only` OK; `release-write` OK only with `trigger=tag` and `runs_untrusted_code is False`; everything else (including `write-all`) fails |
 | S4 | `ci.json` | `log_environment is True` and at least one active `secret_ref` |
@@ -87,7 +87,7 @@ Point the script at any directory with the same schema (`inventory.json`, `ci.js
 | Path | Purpose |
 |---|---|
 | [audit.py](audit.py) | The auditor |
-| [tests/test_audit.py](tests/test_audit.py) | 19 decision tests |
+| [tests/test_audit.py](tests/test_audit.py) | 23 decision tests |
 | [tests/mutation_check.py](tests/mutation_check.py) | Confirms the tests catch planted bugs |
 | [output/](output/) | Captured reports, test output, mutation output |
 | [REMEDIATION.md](REMEDIATION.md) | Top-two actions and snapshot comparison |
