@@ -32,7 +32,7 @@ python3 audit.py inputs/snapshot-one --json output/snapshot-one.json --summary o
 python3 audit.py inputs/snapshot-two --json output/snapshot-two.json --summary output/snapshot-two.txt
 ```
 
-Tests (29 decision checks):
+Tests (30 decision checks):
 
 ```bash
 python3 -m unittest discover -s tests -v
@@ -61,7 +61,7 @@ Exit codes:
 |---|---|
 | `0` | Audit ran (findings, if any, are in the report) |
 | `1` | Audit ran and found something, only with `--fail-on-findings` |
-| `2` | Could not audit: bad usage, missing `inventory.json`/`ci.json`, or input that does not match the schema |
+| `2` | Could not audit: bad usage, missing `inventory.json`/`ci.json`, input that does not match the schema, or the output safety net found a full token value (nothing is written) |
 
 **Input validation.** Before any rule runs, both JSON files are checked against the policy schema: valid JSON; `trigger` is `pull_request` or `tag`; `permissions` is `read-only`, `release-write` or `write-all`; `runs_untrusted_code` and `log_environment` are real booleans; `secret_refs` and `artifact_paths` are lists of strings; token entries have string `token_id`/`value`/`state` and unique ids. Every problem in both files is listed in one run, and no report is written. Messages never include token values. This prevents a malformed flag such as `"true"` (a string) from silently passing S2/S4.
 
@@ -96,8 +96,8 @@ Point the script at any directory with the same schema (`inventory.json`, `ci.js
 
 | Path | Purpose |
 |---|---|
-| [audit.py](audit.py) | The auditor, one file in labelled sections: constants → `Record` dataclass → loading & schema validation → matching & redaction → record builders (explanation text per rule) → S1 scan → S2–S5 checks → report → command line |
-| [tests/test_audit.py](tests/test_audit.py) | 29 decision tests |
+| [audit.py](audit.py) | The auditor, one file in labelled sections: constants → typed records (`TextRecord`, `CiRecord`, `UnresolvedRef`, `InventoryWarning`, `Report`) → loading & schema validation → matching & redaction → record builders (explanation text per rule) → S1 scan → S2–S5 checks → report → command line |
+| [tests/test_audit.py](tests/test_audit.py) | 30 decision tests |
 | [tests/mutation_check.py](tests/mutation_check.py) | Confirms the tests catch planted bugs |
 | [output/](output/) | Captured reports, test output, mutation output |
 | [REMEDIATION.md](REMEDIATION.md) | Top-two actions and snapshot comparison |

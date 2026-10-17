@@ -13,7 +13,7 @@ import sys
 from dataclasses import dataclass, fields
 from fnmatch import fnmatchcase
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 # ---------------------------------------------------------------------------
 # Constants (from policy.md)
@@ -62,33 +62,120 @@ def is_sensitive(state: str) -> bool:
 # Records
 # ---------------------------------------------------------------------------
 
-@dataclass(kw_only=True)
-class Record:
-    """One finding or benign decision. Text records (S1) carry path/line/token;
-    CI records (S2-S5) carry workflow_id. Field order is the JSON key order."""
+def record_dict(record: Any) -> dict:
+    """JSON form of a record dataclass: rule_id (if any), kind, then the
+    remaining fields in declaration order, then location (if any)."""
+    data = {}
+    names = [f.name for f in fields(record)]
+    if "rule_id" in names:
+        data["rule_id"] = record.rule_id
+    data["kind"] = record.kind
+    for name in names:
+        if name != "rule_id":
+            data[name] = getattr(record, name)
+    if hasattr(record, "location"):
+        data["location"] = record.location
+    return data
 
+
+@dataclass(frozen=True)
+class TextRecord:
+    """S1 finding or benign decision: a token value matched in a content file."""
+
+    kind: ClassVar[str] = "text"
     rule_id: str
-    kind: str  # "text" or "ci"
-    path: str | None = None
-    line: int | None = None
-    token_id: str | None = None
-    token_state: str | None = None
-    workflow_id: str | None = None
-    evidence: str | dict
+    path: str
+    line: int
+    token_id: str
+    token_state: str
+    evidence: str
     rationale: str
     next_action: str
 
     @property
     def location(self) -> str:
-        if self.kind == "text":
-            return f"{self.path}:{self.line}"
+        return f"{self.path}:{self.line}"
+
+
+@dataclass(frozen=True)
+class CiRecord:
+    """S2-S5 finding or benign decision about one workflow."""
+
+    kind: ClassVar[str] = "ci"
+    rule_id: str
+    workflow_id: str
+    evidence: dict
+    rationale: str
+    next_action: str
+
+    @property
+    def location(self) -> str:
         return f"workflow:{self.workflow_id}"
 
+
+Record = TextRecord | CiRecord
+
+
+@dataclass(frozen=True)
+class UnresolvedRef:
+    """A secret_ref that is not in the inventory: reported, never assumed active."""
+
+    kind: ClassVar[str] = "unresolved_ref"
+    workflow_id: str
+    secret_ref: str
+    rationale: str = "secret_ref is not in inventory.json; state unknown, no credential assumed."
+    next_action: str = "Confirm what this ref names and add it to the inventory."
+
+
+@dataclass(frozen=True)
+class InventoryWarning:
+    """An inventory entry that cannot be matched safely (blank value)."""
+
+    kind: ClassVar[str] = "inventory_warning"
+    token_id: str
+    token_state: str
+    issue: str = "blank value; cannot be matched in content, S1 skipped for this token."
+    next_action: str = "Fix the inventory entry so it holds the exact token value."
+
+
+@dataclass(frozen=True)
+class Report:
+    """Everything one audit run produced; to_dict() is the JSON report."""
+
+    snapshot: str
+    scanned_files: list[str]
+    workflows: list[str]
+    sensitive_paths: list[str]
+    findings: list[Record]
+    benign_decisions: list[Record]
+    unresolved_refs: list[UnresolvedRef]
+    inventory_warnings: list[InventoryWarning]
+
+    def findings_by_rule(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for record in self.findings:
+            counts[record.rule_id] = counts.get(record.rule_id, 0) + 1
+        return dict(sorted(counts.items()))
+
     def to_dict(self) -> dict:
-        """JSON form: unset fields are omitted, location is appended last."""
-        data = {f.name: getattr(self, f.name) for f in fields(self) if getattr(self, f.name) is not None}
-        data["location"] = self.location
-        return data
+        return {
+            "report_schema": "pinebuild-audit/1",
+            "snapshot": self.snapshot,
+            "scanned_files": self.scanned_files,
+            "workflows": self.workflows,
+            "sensitive_paths": self.sensitive_paths,
+            "summary": {
+                "findings": len(self.findings),
+                "findings_by_rule": self.findings_by_rule(),
+                "benign_decisions": len(self.benign_decisions),
+                "unresolved_refs": len(self.unresolved_refs),
+                "inventory_warnings": len(self.inventory_warnings),
+            },
+            "findings": [record_dict(r) for r in self.findings],
+            "benign_decisions": [record_dict(r) for r in self.benign_decisions],
+            "unresolved_refs": [record_dict(r) for r in self.unresolved_refs],
+            "inventory_warnings": [record_dict(r) for r in self.inventory_warnings],
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -231,27 +318,19 @@ def values_longest_first(tokens: Tokens) -> list[tuple[str, str]]:
     return sorted(pairs, key=lambda p: len(p[0]), reverse=True)
 
 
-def inventory_warnings(tokens: Tokens) -> list[dict]:
+def inventory_warnings(tokens: Tokens) -> list[InventoryWarning]:
     """Inventory entries that cannot be matched safely (blank value).
 
     A blank value would match every line, so it is excluded from S1 and
     reported here instead of producing noise."""
-    return [
-        {
-            "kind": "inventory_warning",
-            "token_id": token_id,
-            "token_state": info["state"],
-            "issue": "blank value; cannot be matched in content, S1 skipped for this token.",
-            "next_action": "Fix the inventory entry so it holds the exact token value.",
-        }
-        for token_id, info in tokens.items()
-        if not info["value"].strip()
-    ]
+    return [InventoryWarning(token_id=token_id, token_state=info["state"])
+            for token_id, info in tokens.items() if not info["value"].strip()]
 
 
-def redact(text: str, tokens: Tokens) -> str:
-    """Replace every known token value with [REDACTED:<token_id>]."""
-    for value, token_id in values_longest_first(tokens):
+def redact(text: str, pairs: list[tuple[str, str]]) -> str:
+    """Replace every known token value with [REDACTED:<token_id>].
+    pairs comes from values_longest_first(), sorted once by the caller."""
+    for value, token_id in pairs:
         text = text.replace(value, f"[REDACTED:{token_id}]")
     return text
 
@@ -261,7 +340,7 @@ def redact(text: str, tokens: Tokens) -> str:
 # ---------------------------------------------------------------------------
 
 def s1_record(rel_path: str, line_no: int, token_id: str, state: str,
-              evidence: str, sensitive: bool) -> Record:
+              evidence: str, sensitive: bool) -> TextRecord:
     if sensitive:
         rationale = (f"Token '{token_id}' is {state} and appears in plaintext; "
                      "filename or directory does not exempt it.")
@@ -271,16 +350,16 @@ def s1_record(rel_path: str, line_no: int, token_id: str, state: str,
         rationale = (f"Token '{token_id}' is {state}; it does not represent a "
                      "current credential exposure, so S1 is suppressed.")
         next_action = "None required; optionally tidy the marker."
-    return Record(rule_id="S1", kind="text", path=rel_path, line=line_no, token_id=token_id,
-                  token_state=state, evidence=evidence, rationale=rationale, next_action=next_action)
+    return TextRecord(rule_id="S1", path=rel_path, line=line_no, token_id=token_id,
+                      token_state=state, evidence=evidence, rationale=rationale, next_action=next_action)
 
 
-def ci_record(rule_id: str, wf: Workflow, evidence: dict, rationale: str, next_action: str) -> Record:
-    return Record(rule_id=rule_id, kind="ci", workflow_id=wf["workflow_id"], evidence=evidence,
-                  rationale=rationale, next_action=next_action)
+def ci_record(rule_id: str, wf: Workflow, evidence: dict, rationale: str, next_action: str) -> CiRecord:
+    return CiRecord(rule_id=rule_id, workflow_id=wf["workflow_id"], evidence=evidence,
+                    rationale=rationale, next_action=next_action)
 
 
-def s2_record(wf: Workflow, sensitive_refs: list[str]) -> Record:
+def s2_record(wf: Workflow, sensitive_refs: list[str]) -> CiRecord:
     return ci_record(
         "S2", wf,
         {"runs_untrusted_code": True, "trigger": wf["trigger"], "active_secret_refs": sensitive_refs},
@@ -291,7 +370,7 @@ def s2_record(wf: Workflow, sensitive_refs: list[str]) -> Record:
     )
 
 
-def s3_record(wf: Workflow) -> Record:
+def s3_record(wf: Workflow) -> CiRecord:
     perm = wf["permissions"]
     why = (f"{PERM_WRITE_ALL} is never permitted." if perm == PERM_WRITE_ALL
            else f"'{perm}' requires trigger={TRIGGER_TAG} and runs_untrusted_code=false.")
@@ -303,7 +382,7 @@ def s3_record(wf: Workflow) -> Record:
     )
 
 
-def s4_record(wf: Workflow, sensitive_refs: list[str]) -> Record:
+def s4_record(wf: Workflow, sensitive_refs: list[str]) -> CiRecord:
     return ci_record(
         "S4", wf,
         {"log_environment": True, "active_secret_refs": sensitive_refs},
@@ -312,7 +391,7 @@ def s4_record(wf: Workflow, sensitive_refs: list[str]) -> Record:
     )
 
 
-def s5_record(wf: Workflow, pattern: str, matched: list[str]) -> Record:
+def s5_record(wf: Workflow, pattern: str, matched: list[str]) -> CiRecord:
     return ci_record(
         "S5", wf,
         {"artifact_pattern": pattern, "matches_sensitive": matched},
@@ -323,21 +402,15 @@ def s5_record(wf: Workflow, pattern: str, matched: list[str]) -> Record:
     )
 
 
-def unresolved_record(wf: Workflow, ref: str) -> dict:
-    return {
-        "kind": "unresolved_ref",
-        "workflow_id": wf["workflow_id"],
-        "secret_ref": ref,
-        "rationale": "secret_ref is not in inventory.json; state unknown, no credential assumed.",
-        "next_action": "Confirm what this ref names and add it to the inventory.",
-    }
+def unresolved_record(wf: Workflow, ref: str) -> UnresolvedRef:
+    return UnresolvedRef(workflow_id=wf["workflow_id"], secret_ref=ref)
 
 
 # ---------------------------------------------------------------------------
 # S1: text scan
 # ---------------------------------------------------------------------------
 
-def scan_text(snapshot: Path, tokens: Tokens, files: list[str]) -> tuple[list[Record], list[Record]]:
+def scan_text(snapshot: Path, tokens: Tokens, files: list[str]) -> tuple[list[TextRecord], list[TextRecord]]:
     """S1: find exact token values in content files.
 
     Returns (findings, benign). Every match produces exactly one record:
@@ -358,7 +431,7 @@ def scan_text(snapshot: Path, tokens: Tokens, files: list[str]) -> tuple[list[Re
                 state = tokens[token_id]["state"]
                 sensitive = is_sensitive(state)
                 record = s1_record(rel_path, line_no, token_id, state,
-                                   redact(line.strip(), tokens), sensitive)
+                                   redact(line.strip(), pairs), sensitive)
                 (findings if sensitive else benign).append(record)
     return findings, benign
 
@@ -380,7 +453,7 @@ def resolve_refs(wf: Workflow, tokens: Tokens) -> tuple[list[str], list[str], li
     return sensitive, non_sensitive, unknown
 
 
-def check_s2(wf: Workflow, sensitive_refs: list[str]) -> list[Record]:
+def check_s2(wf: Workflow, sensitive_refs: list[str]) -> list[CiRecord]:
     """S2: untrusted code with any active secret available."""
     if wf["runs_untrusted_code"] is True and sensitive_refs:
         return [s2_record(wf, sensitive_refs)]
@@ -397,21 +470,21 @@ def permission_allowed(wf: Workflow) -> bool:
     return False  # write-all, or anything unrecognised
 
 
-def check_s3(wf: Workflow) -> list[Record]:
+def check_s3(wf: Workflow) -> list[CiRecord]:
     """S3: permissions beyond what the policy allows for this trigger."""
     if permission_allowed(wf):
         return []
     return [s3_record(wf)]
 
 
-def check_s4(wf: Workflow, sensitive_refs: list[str]) -> list[Record]:
+def check_s4(wf: Workflow, sensitive_refs: list[str]) -> list[CiRecord]:
     """S4: full environment logging while any active secret is present."""
     if wf["log_environment"] is True and sensitive_refs:
         return [s4_record(wf, sensitive_refs)]
     return []
 
 
-def check_s5(wf: Workflow, files: list[str], sensitive_paths: tuple[str, ...]) -> list[Record]:
+def check_s5(wf: Workflow, files: list[str], sensitive_paths: tuple[str, ...]) -> list[CiRecord]:
     """S5: an artifact pattern that expands to a configured sensitive file."""
     records = []
     for pattern in wf["artifact_paths"]:
@@ -421,7 +494,7 @@ def check_s5(wf: Workflow, files: list[str], sensitive_paths: tuple[str, ...]) -
     return records
 
 
-def ci_benign(wf: Workflow, sensitive_refs: list[str], non_sensitive_refs: list[str]) -> list[Record]:
+def ci_benign(wf: Workflow, sensitive_refs: list[str], non_sensitive_refs: list[str]) -> list[CiRecord]:
     """Benign decisions worth showing: the release-write exception, active
     secrets held by a workflow that is otherwise safe, and stale refs."""
     benign = []
@@ -450,7 +523,7 @@ def ci_benign(wf: Workflow, sensitive_refs: list[str], non_sensitive_refs: list[
 
 
 def check_ci(workflows: list[Workflow], tokens: Tokens, files: list[str],
-             sensitive_paths: tuple[str, ...]) -> tuple[list[Record], list[Record], list[dict]]:
+             sensitive_paths: tuple[str, ...]) -> tuple[list[CiRecord], list[CiRecord], list[UnresolvedRef]]:
     """Run S2-S5 on every workflow. Returns (findings, benign, unresolved)."""
     findings, benign, unresolved = [], [], []
     for wf in workflows:
@@ -469,51 +542,38 @@ def check_ci(workflows: list[Workflow], tokens: Tokens, files: list[str],
 # ---------------------------------------------------------------------------
 
 def build_report(snapshot: Path, tokens: Tokens, workflows: list[Workflow],
-                 sensitive_paths: tuple[str, ...]) -> dict:
-    """Run every rule on loaded inputs and return the machine-readable report."""
+                 sensitive_paths: tuple[str, ...]) -> Report:
+    """Run every rule on loaded inputs."""
     files = list_content_files(snapshot)
-    warnings = inventory_warnings(tokens)
     text_findings, text_benign = scan_text(snapshot, tokens, files)
     ci_findings, ci_benign_records, unresolved = check_ci(workflows, tokens, files, sensitive_paths)
-
-    findings = [r.to_dict() for r in text_findings + ci_findings]
-    benign = [r.to_dict() for r in text_benign + ci_benign_records]
-
-    by_rule = {}
-    for record in findings:
-        by_rule[record["rule_id"]] = by_rule.get(record["rule_id"], 0) + 1
-
-    return {
-        "report_schema": "pinebuild-audit/1",
-        "snapshot": snapshot.as_posix(),
-        "scanned_files": files,
-        "workflows": [w["workflow_id"] for w in workflows],
-        "sensitive_paths": list(sensitive_paths),
-        "summary": {
-            "findings": len(findings),
-            "findings_by_rule": dict(sorted(by_rule.items())),
-            "benign_decisions": len(benign),
-            "unresolved_refs": len(unresolved),
-            "inventory_warnings": len(warnings),
-        },
-        "findings": findings,
-        "benign_decisions": benign,
-        "unresolved_refs": unresolved,
-        "inventory_warnings": warnings,
-    }
+    return Report(
+        snapshot=snapshot.as_posix(),
+        scanned_files=files,
+        workflows=[w["workflow_id"] for w in workflows],
+        sensitive_paths=list(sensitive_paths),
+        findings=[*text_findings, *ci_findings],
+        benign_decisions=[*text_benign, *ci_benign_records],
+        unresolved_refs=unresolved,
+        inventory_warnings=inventory_warnings(tokens),
+    )
 
 
 def audit(snapshot: Path, sensitive_paths: tuple[str, ...] = DEFAULT_SENSITIVE_PATHS) -> dict:
-    """Load, validate and audit a snapshot directory; return the report."""
+    """Load, validate and audit a snapshot directory; return the JSON report as a dict."""
     tokens, workflows = load_snapshot(snapshot)
-    return build_report(snapshot, tokens, workflows, sensitive_paths)
+    return build_report(snapshot, tokens, workflows, sensitive_paths).to_dict()
+
+
+class UnredactedValueError(Exception):
+    """The output safety net found a full token value; nothing may be written."""
 
 
 def assert_no_token_values(serialized: str, tokens: Tokens) -> None:
     """Safety net: refuse to emit output that contains any full token value."""
     for token_id, info in tokens.items():
         if info["value"].strip() and info["value"] in serialized:
-            raise RuntimeError(f"refusing to output unredacted value of '{token_id}'")
+            raise UnredactedValueError(f"refusing to output unredacted value of '{token_id}'")
 
 
 def format_evidence(evidence: str | dict) -> str:
@@ -528,52 +588,44 @@ def format_evidence(evidence: str | dict) -> str:
     return "; ".join(parts)
 
 
-def format_summary(report: dict) -> str:
-    """Readable summary of a report: findings, benign decisions, unresolved refs, warnings."""
-    s = report["summary"]
-    by_rule = " ".join(f"{k}:{v}" for k, v in s["findings_by_rule"].items()) or "none"
+def format_record(record: Record, with_next: bool) -> list[str]:
+    """Summary lines for one finding (with next action) or benign decision."""
+    head = f"[{record.rule_id}] {record.location}"
+    if isinstance(record, TextRecord):
+        head += f"  token_id={record.token_id} ({record.token_state})"
     lines = [
-        f"PineBuild secrets/CI audit: {report['snapshot']}",
-        f"Scanned files: {', '.join(report['scanned_files'])}",
-        f"Workflows: {', '.join(report['workflows'])}",
-        f"Sensitive paths (S5): {', '.join(report['sensitive_paths'])}",
-        f"Result: {s['findings']} findings ({by_rule}), "
-        f"{s['benign_decisions']} benign decisions, {s['unresolved_refs']} unresolved refs, "
-        f"{s['inventory_warnings']} inventory warnings",
-        "",
-        "FINDINGS",
+        head,
+        f"    evidence: {format_evidence(record.evidence)}",
+        f"    why:      {record.rationale}",
     ]
+    if with_next:
+        lines.append(f"    next:     {record.next_action}")
+    return lines
 
-    def block(record: dict) -> list[str]:
-        head = f"[{record['rule_id']}] {record['location']}"
-        if record["kind"] == "text":
-            head += f"  token_id={record['token_id']} ({record['token_state']})"
-        return [
-            head,
-            f"    evidence: {format_evidence(record['evidence'])}",
-            f"    why:      {record['rationale']}",
-            f"    next:     {record['next_action']}",
-        ]
 
-    for record in report["findings"]:
-        lines += block(record)
-    if not report["findings"]:
-        lines.append("  none")
-    lines += ["", "BENIGN DECISIONS (seen and deliberately not flagged)"]
-    for record in report["benign_decisions"]:
-        lines += block(record)[:3]
-    if not report["benign_decisions"]:
-        lines.append("  none")
-    lines += ["", "UNRESOLVED SECRET REFS"]
-    for record in report["unresolved_refs"]:
-        lines.append(f"  workflow:{record['workflow_id']}  ref={record['secret_ref']}  {record['rationale']}")
-    if not report["unresolved_refs"]:
-        lines.append("  none")
-    lines += ["", "INVENTORY WARNINGS"]
-    for record in report["inventory_warnings"]:
-        lines.append(f"  token_id={record['token_id']} ({record['token_state']})  {record['issue']}")
-    if not report["inventory_warnings"]:
-        lines.append("  none")
+def format_summary(report: Report) -> str:
+    """Readable summary: findings, benign decisions, unresolved refs, warnings."""
+    by_rule = " ".join(f"{k}:{v}" for k, v in report.findings_by_rule().items()) or "none"
+    lines = [
+        f"PineBuild secrets/CI audit: {report.snapshot}",
+        f"Scanned files: {', '.join(report.scanned_files)}",
+        f"Workflows: {', '.join(report.workflows)}",
+        f"Sensitive paths (S5): {', '.join(report.sensitive_paths)}",
+        f"Result: {len(report.findings)} findings ({by_rule}), "
+        f"{len(report.benign_decisions)} benign decisions, {len(report.unresolved_refs)} unresolved refs, "
+        f"{len(report.inventory_warnings)} inventory warnings",
+    ]
+    sections = [
+        ("FINDINGS", [line for r in report.findings for line in format_record(r, with_next=True)]),
+        ("BENIGN DECISIONS (seen and deliberately not flagged)",
+         [line for r in report.benign_decisions for line in format_record(r, with_next=False)]),
+        ("UNRESOLVED SECRET REFS",
+         [f"  workflow:{r.workflow_id}  ref={r.secret_ref}  {r.rationale}" for r in report.unresolved_refs]),
+        ("INVENTORY WARNINGS",
+         [f"  token_id={r.token_id} ({r.token_state})  {r.issue}" for r in report.inventory_warnings]),
+    ]
+    for title, body in sections:
+        lines += ["", title] + (body or ["  none"])
     return "\n".join(lines) + "\n"
 
 
@@ -583,7 +635,7 @@ def format_summary(report: dict) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     """Command-line entry point. Returns the exit code (0 ok, 1 findings with
-    --fail-on-findings, 2 unusable input)."""
+    --fail-on-findings, 2 unusable input or output refused by the safety net)."""
     parser = argparse.ArgumentParser(description="Audit a PineBuild snapshot directory.")
     parser.add_argument("snapshot", type=Path, help="path to a snapshot directory")
     parser.add_argument(
@@ -610,9 +662,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  - {problem}", file=sys.stderr)
         return 2
     report = build_report(snapshot, tokens, workflows, sensitive_paths)
-    report_json = json.dumps(report, indent=2) + "\n"
+    report_json = json.dumps(report.to_dict(), indent=2) + "\n"
     summary = format_summary(report)
-    assert_no_token_values(report_json + summary, tokens)
+    try:
+        assert_no_token_values(report_json + summary, tokens)
+    except UnredactedValueError as exc:
+        print(f"error: {exc}; no output written", file=sys.stderr)
+        return 2
 
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
@@ -622,7 +678,7 @@ def main(argv: list[str] | None = None) -> int:
         args.summary.write_text(summary, encoding="utf-8")
     sys.stdout.write(summary)
 
-    if args.fail_on_findings and report["findings"]:
+    if args.fail_on_findings and report.findings:
         return 1
     return 0
 

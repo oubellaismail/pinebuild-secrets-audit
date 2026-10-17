@@ -25,10 +25,11 @@ test_sensitive_paths_are_configurable (test_audit.TestS5ArtifactWildcardExpansio
 test_wildcards_expand_to_sensitive_files (test_audit.TestS5ArtifactWildcardExpansion.test_wildcards_expand_to_sensitive_files) ... ok
 test_cli_handles_blank_inventory_value (test_audit.TestSuppliedSnapshots.test_cli_handles_blank_inventory_value) ... ok
 test_cli_output_never_contains_token_values (test_audit.TestSuppliedSnapshots.test_cli_output_never_contains_token_values) ... ok
+test_safety_net_refuses_output_cleanly (test_audit.TestSuppliedSnapshots.test_safety_net_refuses_output_cleanly) ... ok
 test_snapshot_one (test_audit.TestSuppliedSnapshots.test_snapshot_one) ... ok
 test_snapshot_two_rotation_did_not_fix_everything (test_audit.TestSuppliedSnapshots.test_snapshot_two_rotation_did_not_fix_everything) ... ok
 
 ----------------------------------------------------------------------
-Ran 29 tests in 0.069s
+Ran 30 tests in 0.083s
 
 OK

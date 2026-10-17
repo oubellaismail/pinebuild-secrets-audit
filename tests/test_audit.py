@@ -15,6 +15,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -345,6 +346,22 @@ class TestSuppliedSnapshots(unittest.TestCase):
                     written = out.read_text()
                 self.assertEqual(code, 0)
                 self.assertNotIn("DEMO_", buf.getvalue() + written)
+
+    def test_safety_net_refuses_output_cleanly(self):
+        # Simulate a redaction bug: the safety net must stop with exit 2 and
+        # a clear message, print no token value and write no file.
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(audit, "redact", lambda text, pairs: text), \
+                redirect_stdout(io.StringIO()) as out, redirect_stderr(err):
+            out_file = Path(tmp) / "r.json"
+            code = audit.main([str(ROOT / "inputs" / "snapshot-two"), "--json", str(out_file)])
+            written = out_file.exists()
+        self.assertEqual(code, 2)
+        self.assertRegex(err.getvalue(),
+                         r"^error: refusing to output unredacted value of '[\w-]+'; no output written\n$")
+        self.assertNotIn("DEMO_", out.getvalue() + err.getvalue())
+        self.assertFalse(written)
 
     def test_cli_handles_blank_inventory_value(self):
         # The output safety net must not treat a blank value as "found everywhere".
