@@ -118,6 +118,24 @@ class TestS1ActiveTextDetection(SnapshotCase):
         self.assertEqual(report["findings"][0]["evidence"], "KEY=[REDACTED:live]")
         self.assertEqual([w["token_id"] for w in report["inventory_warnings"]], ["blank"])
 
+    def test_nested_folder_is_scanned(self):
+        report = self.run_audit(
+            {"live": ("DEMO_ACTIVE_X1", ACTIVE)}, [workflow()],
+            {"app/config/env.txt": "a\nKEY=DEMO_ACTIVE_X1\n"},
+        )
+        self.assertEqual(self.keys(report["findings"]), {("S1", "app/config/env.txt:2")})
+
+    def test_same_token_twice_on_one_line_is_one_record(self):
+        # Both copies must be blanked: a shorter value hidden inside the second
+        # copy must not produce an extra match.
+        report = self.run_audit(
+            {"live": ("DEMO_ACTIVE_X1", ACTIVE), "short": ("DEMO_ACTIVE", REVOKED)}, [workflow()],
+            {"docs/n.txt": "A=DEMO_ACTIVE_X1 B=DEMO_ACTIVE_X1\n"},
+        )
+        self.assertEqual([f["token_id"] for f in report["findings"]], ["live"])
+        self.assertEqual(report["findings"][0]["evidence"], "A=[REDACTED:live] B=[REDACTED:live]")
+        self.assertEqual(report["benign_decisions"], [])
+
     def test_next_action_rotates_before_cleanup(self):
         report = self.run_audit(
             {"live": ("DEMO_ACTIVE_X1", ACTIVE)}, [workflow()], {"docs/n.txt": "DEMO_ACTIVE_X1\n"})
@@ -239,12 +257,87 @@ class TestS2S4SecretIntersection(SnapshotCase):
             {"k": ("DEMO_A", ACTIVE)})
         self.assertEqual(rules, ["S4"])
 
+    def test_unknown_token_state_in_ref_counts_for_s2(self):
+        rules, _ = self.ci_rules(workflow(secret_refs=["k"]), {"k": ("DEMO_A", "pending_review")})
+        self.assertEqual(rules, ["S2"])
+
     def test_unknown_ref_is_unresolved_not_invented(self):
         rules, report = self.ci_rules(
             workflow(secret_refs=["ghost"], log_environment=True), {})
         self.assertEqual(rules, [])
         self.assertEqual([(u["workflow_id"], u["secret_ref"]) for u in report["unresolved_refs"]],
                          [("wf", "ghost")])
+
+
+class TestCiBenignDecisions(SnapshotCase):
+    """CI benign decisions are evidence the README requires; assert them."""
+
+    def test_trusted_release_workflow_is_recorded_as_benign(self):
+        report = self.run_audit(
+            {"k": ("DEMO_A", ACTIVE), "old": ("DEMO_OLD", REVOKED)},
+            [workflow(workflow_id="rel", trigger="tag", runs_untrusted_code=False,
+                      permissions="release-write", secret_refs=["k", "old"])],
+            {},
+        )
+        self.assertEqual(report["findings"], [])
+        benign = [(r["rule_id"], r["location"], r["evidence"]) for r in report["benign_decisions"]]
+        self.assertEqual(benign, [
+            ("S3", "workflow:rel",
+             {"permissions": "release-write", "trigger": "tag", "runs_untrusted_code": False}),
+            ("S2/S4", "workflow:rel",
+             {"active_secret_refs": ["k"], "runs_untrusted_code": False, "log_environment": False}),
+            ("S2/S4", "workflow:rel", {"non_sensitive_secret_refs": ["old"]}),
+        ])
+
+    def test_disallowed_release_write_is_finding_not_benign(self):
+        report = self.run_audit({}, [workflow(permissions="release-write")], {})
+        self.assertEqual(self.keys(report["findings"]), {("S3", "workflow:wf")})
+        self.assertEqual(report["benign_decisions"], [])
+
+
+class TestCommandLine(SnapshotCase):
+    """Documented command-line behaviour: options, files and exit codes."""
+
+    FILES = {"app/env.txt": "x\n", "build/report.txt": "ok\n"}
+
+    def cli(self, *args) -> tuple:
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = audit.main([str(a) for a in args])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_sensitive_path_flag_replaces_defaults(self):
+        root = self.make_snapshot({}, [workflow(artifact_paths=["app/*", "build/report.txt"])], self.FILES)
+        out_file = root / "r.json"
+        code, _, _ = self.cli(root, "--sensitive-path", "build/report.txt", "--json", out_file)
+        report = json.loads(out_file.read_text())
+        self.assertEqual(code, 0)
+        self.assertEqual(report["sensitive_paths"], ["build/report.txt"])
+        # app/env.txt is no longer sensitive, so app/* is not a finding.
+        self.assertEqual([f["evidence"]["artifact_pattern"] for f in report["findings"]], ["build/report.txt"])
+
+    def test_fail_on_findings_exit_codes(self):
+        risky = self.make_snapshot({}, [workflow(artifact_paths=["app/*"])], self.FILES)
+        clean = self.make_snapshot({}, [workflow()], self.FILES)
+        self.assertEqual(self.cli(risky, "--fail-on-findings")[0], 1)
+        self.assertEqual(self.cli(clean, "--fail-on-findings")[0], 0)
+        self.assertEqual(self.cli(risky)[0], 0)  # findings alone are not an error
+
+    def test_summary_file_matches_stdout(self):
+        root = self.make_snapshot({}, [workflow(artifact_paths=["app/*"])], self.FILES)
+        summary_file = root / "out" / "summary.txt"
+        code, out, _ = self.cli(root, "--summary", summary_file)
+        self.assertEqual(code, 0)
+        self.assertEqual(summary_file.read_text(), out)
+        self.assertIn("[S5] workflow:wf", out)
+
+    def test_missing_input_file_exits_2(self):
+        root = self.make_snapshot({}, [], {})
+        (root / "ci.json").unlink()
+        code, out, err = self.cli(root)
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertEqual(err, f"error: {root} must contain inventory.json and ci.json\n")
 
 
 class TestInputValidation(SnapshotCase):

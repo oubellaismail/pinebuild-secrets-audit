@@ -32,13 +32,13 @@ python3 audit.py inputs/snapshot-one --json output/snapshot-one.json --summary o
 python3 audit.py inputs/snapshot-two --json output/snapshot-two.json --summary output/snapshot-two.txt
 ```
 
-Tests (30 decision checks):
+Tests (39 decision checks):
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-Mutation check (plants 6 bugs in temp copies of `audit.py` and confirms the tests catch each one):
+Mutation check (plants 14 bugs in temp copies of `audit.py` and confirms the tests catch each one):
 
 ```bash
 python3 tests/mutation_check.py .
@@ -97,7 +97,7 @@ Point the script at any directory with the same schema (`inventory.json`, `ci.js
 | Path | Purpose |
 |---|---|
 | [audit.py](audit.py) | The auditor, one file in labelled sections: constants → typed records (`TextRecord`, `CiRecord`, `UnresolvedRef`, `InventoryWarning`, `Report`) → loading & schema validation → matching & redaction → record builders (explanation text per rule) → S1 scan → S2–S5 checks → report → command line |
-| [tests/test_audit.py](tests/test_audit.py) | 30 decision tests |
+| [tests/test_audit.py](tests/test_audit.py) | 39 decision tests |
 | [tests/mutation_check.py](tests/mutation_check.py) | Confirms the tests catch planted bugs |
 | [output/](output/) | Captured reports, test output, mutation output |
 | [REMEDIATION.md](REMEDIATION.md) | Top-two actions and snapshot comparison |

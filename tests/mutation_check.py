@@ -16,6 +16,22 @@ MUTANTS = {
         'if wf["runs_untrusted_code"] is True and wf["secret_refs"]:'),
     "redaction disabled": ('text = text.replace(value, f"[REDACTED:{token_id}]")', "pass"),
     "CI schema validation skipped": ("    errors = validate_ci(data)\n", "    errors = []\n"),
+    "CI benign S3 exception dropped": (
+        'if wf["permissions"] == PERM_RELEASE_WRITE and permission_allowed(wf):', "if False:"),
+    "--sensitive-path adds to defaults": (
+        "sensitive_paths = tuple(args.sensitive_paths or DEFAULT_SENSITIVE_PATHS)",
+        "sensitive_paths = tuple((args.sensitive_paths or []) + list(DEFAULT_SENSITIVE_PATHS))"),
+    "--fail-on-findings ignored": ("if args.fail_on_findings and report.findings:", "if False:"),
+    "--summary not written": ('args.summary.write_text(summary, encoding="utf-8")', "pass"),
+    "missing input file not checked": (
+        'if not (snapshot / "inventory.json").is_file() or not (snapshot / "ci.json").is_file():',
+        "if False:"),
+    "unknown state in refs not sensitive": (
+        'elif is_sensitive(tokens[ref]["state"]):', 'elif tokens[ref]["state"] == "active_in_fixture":'),
+    "nested folders not scanned": ('for path in base.rglob("*"):', 'for path in base.glob("*"):'),
+    "only first copy blanked on a line": (
+        'remaining = remaining.replace(value, " " * len(value))',
+        'remaining = remaining.replace(value, " " * len(value), 1)'),
 }
 for name, (old, new) in MUTANTS.items():
     assert src.count(old) == 1, f"mutant target not found exactly once: {name}"

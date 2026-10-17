@@ -1,3 +1,9 @@
+test_disallowed_release_write_is_finding_not_benign (test_audit.TestCiBenignDecisions.test_disallowed_release_write_is_finding_not_benign) ... ok
+test_trusted_release_workflow_is_recorded_as_benign (test_audit.TestCiBenignDecisions.test_trusted_release_workflow_is_recorded_as_benign) ... ok
+test_fail_on_findings_exit_codes (test_audit.TestCommandLine.test_fail_on_findings_exit_codes) ... ok
+test_missing_input_file_exits_2 (test_audit.TestCommandLine.test_missing_input_file_exits_2) ... ok
+test_sensitive_path_flag_replaces_defaults (test_audit.TestCommandLine.test_sensitive_path_flag_replaces_defaults) ... ok
+test_summary_file_matches_stdout (test_audit.TestCommandLine.test_summary_file_matches_stdout) ... ok
 test_error_messages_never_contain_token_values (test_audit.TestInputValidation.test_error_messages_never_contain_token_values) ... ok
 test_errors_from_both_files_reported_in_one_run (test_audit.TestInputValidation.test_errors_from_both_files_reported_in_one_run) ... ok
 test_malformed_json_is_clear_error (test_audit.TestInputValidation.test_malformed_json_is_clear_error) ... ok
@@ -8,7 +14,9 @@ test_active_token_in_test_file_is_finding_with_line_and_redaction (test_audit.Te
 test_blank_inventory_value_is_warning_not_match (test_audit.TestS1ActiveTextDetection.test_blank_inventory_value_is_warning_not_match) ... ok
 test_dotfile_is_scanned_but_os_metadata_is_not (test_audit.TestS1ActiveTextDetection.test_dotfile_is_scanned_but_os_metadata_is_not) ... ok
 test_inventory_and_unscanned_dirs_are_not_findings (test_audit.TestS1ActiveTextDetection.test_inventory_and_unscanned_dirs_are_not_findings) ... ok
+test_nested_folder_is_scanned (test_audit.TestS1ActiveTextDetection.test_nested_folder_is_scanned) ... ok
 test_next_action_rotates_before_cleanup (test_audit.TestS1ActiveTextDetection.test_next_action_rotates_before_cleanup) ... ok
+test_same_token_twice_on_one_line_is_one_record (test_audit.TestS1ActiveTextDetection.test_same_token_twice_on_one_line_is_one_record) ... ok
 test_unknown_token_state_is_treated_as_sensitive (test_audit.TestS1ActiveTextDetection.test_unknown_token_state_is_treated_as_sensitive) ... ok
 test_same_line_mixed_states_only_flags_active (test_audit.TestS1TestAndRevokedSuppression.test_same_line_mixed_states_only_flags_active) ... ok
 test_test_and_revoked_tokens_are_benign_not_findings (test_audit.TestS1TestAndRevokedSuppression.test_test_and_revoked_tokens_are_benign_not_findings) ... ok
@@ -16,6 +24,7 @@ test_value_containing_another_value_matches_longer_only (test_audit.TestS1TestAn
 test_env_logging_with_active_secret_is_s4_even_when_trusted (test_audit.TestS2S4SecretIntersection.test_env_logging_with_active_secret_is_s4_even_when_trusted) ... ok
 test_trusted_with_active_secret_is_not_s2 (test_audit.TestS2S4SecretIntersection.test_trusted_with_active_secret_is_not_s2) ... ok
 test_unknown_ref_is_unresolved_not_invented (test_audit.TestS2S4SecretIntersection.test_unknown_ref_is_unresolved_not_invented) ... ok
+test_unknown_token_state_in_ref_counts_for_s2 (test_audit.TestS2S4SecretIntersection.test_unknown_token_state_in_ref_counts_for_s2) ... ok
 test_untrusted_with_active_secret_is_s2 (test_audit.TestS2S4SecretIntersection.test_untrusted_with_active_secret_is_s2) ... ok
 test_untrusted_with_revoked_secret_is_not_s2 (test_audit.TestS2S4SecretIntersection.test_untrusted_with_revoked_secret_is_not_s2) ... ok
 test_exact_policy_table (test_audit.TestS3PermissionTriggerPolicy.test_exact_policy_table) ... ok
@@ -30,6 +39,6 @@ test_snapshot_one (test_audit.TestSuppliedSnapshots.test_snapshot_one) ... ok
 test_snapshot_two_rotation_did_not_fix_everything (test_audit.TestSuppliedSnapshots.test_snapshot_two_rotation_did_not_fix_everything) ... ok
 
 ----------------------------------------------------------------------
-Ran 30 tests in 0.083s
+Ran 39 tests in 0.105s
 
 OK
