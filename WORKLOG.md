@@ -1,13 +1,16 @@
 # Decision and work log
 
-Date: 2026-10-16.
+Dates: 2026-10-16 to 2026-10-17.
 
 ## Order of work
 
+0. Before any code, made sure I understood the problem: had the AI explain each rule S1–S5 with the risks shown in the snapshots, each `ci.json` field (meaning, risk, best practice), and what "untrusted code" means. Chose to build step by step so I could review each step before the next.
 1. Read the README, the policy and both snapshots. Worked out the expected findings by hand before writing code, so there was an independent answer to check the auditor against.
 2. Built `audit.py` incrementally: loading → S1 text scan → S2–S5 CI checks → JSON and summary output. Ran both snapshots after each step and compared with the hand results.
 3. Wrote decision tests, then a mutation check to prove the tests can fail.
 4. Wrote the remediation queue and docs from the captured output.
+5. Reviewed the implementation: walked through the S1 functions and their tests, and `main()`, line by line, and confirmed how the mutation check works (temporary copies only).
+6. Asked the AI to grade the work against the rubric. The probing this triggered found real problems (dotfiles skipped, blank token values, string flags passing S2/S4, tracebacks on broken JSON), each fixed with tests in its own commit. Review of the code is ongoing.
 
 ## Key decisions
 
