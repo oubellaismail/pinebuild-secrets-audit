@@ -29,6 +29,6 @@ test_snapshot_one (test_audit.TestSuppliedSnapshots.test_snapshot_one) ... ok
 test_snapshot_two_rotation_did_not_fix_everything (test_audit.TestSuppliedSnapshots.test_snapshot_two_rotation_did_not_fix_everything) ... ok
 
 ----------------------------------------------------------------------
-Ran 29 tests in 0.070s
+Ran 29 tests in 0.069s
 
 OK

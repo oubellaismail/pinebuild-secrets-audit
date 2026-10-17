@@ -96,7 +96,7 @@ Point the script at any directory with the same schema (`inventory.json`, `ci.js
 
 | Path | Purpose |
 |---|---|
-| [audit.py](audit.py) | The auditor |
+| [audit.py](audit.py) | The auditor, one file in labelled sections: constants → `Record` dataclass → loading & schema validation → matching & redaction → record builders (explanation text per rule) → S1 scan → S2–S5 checks → report → command line |
 | [tests/test_audit.py](tests/test_audit.py) | 29 decision tests |
 | [tests/mutation_check.py](tests/mutation_check.py) | Confirms the tests catch planted bugs |
 | [output/](output/) | Captured reports, test output, mutation output |

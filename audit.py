@@ -10,8 +10,14 @@ Python 3.10+ standard library only. Reads files, never contacts a network.
 import argparse
 import json
 import sys
+from dataclasses import dataclass, fields
 from fnmatch import fnmatchcase
 from pathlib import Path
+from typing import Any
+
+# ---------------------------------------------------------------------------
+# Constants (from policy.md)
+# ---------------------------------------------------------------------------
 
 # The four content directories the policy allows us to text-scan.
 SCANNED_DIRS = ("app", "tests", "docs", "build")
@@ -25,31 +31,80 @@ DEFAULT_SENSITIVE_PATHS = ("app/env.txt", "docs/rotation.txt")
 
 # Token states. Only these two are known to be harmless; anything else
 # (active_in_fixture, or an unknown future state) is handled as sensitive.
-ACTIVE_STATE = "active_in_fixture"
 NON_SENSITIVE_STATES = ("revoked_in_fixture", "test_only")
 
+# Allowed CI values. Anything else is a schema error, so a malformed flag
+# such as "true" (a string) cannot silently pass S2/S4.
+TRIGGER_PULL_REQUEST = "pull_request"
+TRIGGER_TAG = "tag"
+TRIGGERS = (TRIGGER_PULL_REQUEST, TRIGGER_TAG)
 
-def is_sensitive(state: str) -> bool:
-    return state not in NON_SENSITIVE_STATES
+PERM_READ_ONLY = "read-only"
+PERM_RELEASE_WRITE = "release-write"
+PERM_WRITE_ALL = "write-all"
+PERMISSIONS = (PERM_READ_ONLY, PERM_RELEASE_WRITE, PERM_WRITE_ALL)
 
-
-# Allowed CI values from the policy. Anything else is a schema error, so a
-# malformed flag such as "true" (a string) cannot silently pass S2/S4.
-TRIGGERS = ("pull_request", "tag")
-PERMISSIONS = ("read-only", "release-write", "write-all")
 BOOLEAN_FIELDS = ("runs_untrusted_code", "log_environment")
 STRING_LIST_FIELDS = ("secret_refs", "artifact_paths")
 
+# {token_id: {"value": ..., "state": ...}}
+Tokens = dict[str, dict[str, str]]
+# One validated entry of ci.json "workflows".
+Workflow = dict[str, Any]
+
+
+def is_sensitive(state: str) -> bool:
+    """True unless the state is one the policy says is not a current exposure."""
+    return state not in NON_SENSITIVE_STATES
+
+
+# ---------------------------------------------------------------------------
+# Records
+# ---------------------------------------------------------------------------
+
+@dataclass(kw_only=True)
+class Record:
+    """One finding or benign decision. Text records (S1) carry path/line/token;
+    CI records (S2-S5) carry workflow_id. Field order is the JSON key order."""
+
+    rule_id: str
+    kind: str  # "text" or "ci"
+    path: str | None = None
+    line: int | None = None
+    token_id: str | None = None
+    token_state: str | None = None
+    workflow_id: str | None = None
+    evidence: str | dict
+    rationale: str
+    next_action: str
+
+    @property
+    def location(self) -> str:
+        if self.kind == "text":
+            return f"{self.path}:{self.line}"
+        return f"workflow:{self.workflow_id}"
+
+    def to_dict(self) -> dict:
+        """JSON form: unset fields are omitted, location is appended last."""
+        data = {f.name: getattr(self, f.name) for f in fields(self) if getattr(self, f.name) is not None}
+        data["location"] = self.location
+        return data
+
+
+# ---------------------------------------------------------------------------
+# Loading and schema validation
+# ---------------------------------------------------------------------------
 
 class SchemaError(Exception):
     """Input does not match the assessment schema; carries every problem found."""
 
-    def __init__(self, errors: list):
+    def __init__(self, errors: list[str]):
         self.errors = errors
         super().__init__("; ".join(errors))
 
 
-def read_json(path: Path):
+def read_json(path: Path) -> Any:
+    """Parse a JSON file, turning parse errors into a SchemaError."""
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
@@ -58,7 +113,7 @@ def read_json(path: Path):
         raise SchemaError([f"{path.name}: not valid UTF-8 text"])
 
 
-def validate_inventory(data) -> list:
+def validate_inventory(data: Any) -> list[str]:
     """Return schema errors for inventory.json. Messages never include token values."""
     if not isinstance(data, dict) or not isinstance(data.get("tokens"), list):
         return ["inventory.json: expected an object with a 'tokens' list"]
@@ -81,7 +136,7 @@ def validate_inventory(data) -> list:
     return errors
 
 
-def validate_ci(data) -> list:
+def validate_ci(data: Any) -> list[str]:
     """Return schema errors for ci.json."""
     if not isinstance(data, dict) or not isinstance(data.get("workflows"), list):
         return ["ci.json: expected an object with a 'workflows' list"]
@@ -113,7 +168,7 @@ def validate_ci(data) -> list:
     return errors
 
 
-def load_inventory(snapshot: Path) -> dict:
+def load_inventory(snapshot: Path) -> Tokens:
     """Return {token_id: {"value": ..., "state": ...}} from inventory.json."""
     data = read_json(snapshot / "inventory.json")
     errors = validate_inventory(data)
@@ -125,7 +180,7 @@ def load_inventory(snapshot: Path) -> dict:
     return tokens
 
 
-def load_workflows(snapshot: Path) -> list:
+def load_workflows(snapshot: Path) -> list[Workflow]:
     """Return the list of workflow dicts from ci.json."""
     data = read_json(snapshot / "ci.json")
     errors = validate_ci(data)
@@ -134,7 +189,24 @@ def load_workflows(snapshot: Path) -> list:
     return data["workflows"]
 
 
-def list_content_files(snapshot: Path) -> list:
+def load_snapshot(snapshot: Path) -> tuple[Tokens, list[Workflow]]:
+    """Load and validate both inputs. Problems from both files are collected
+    before raising, so one run reports every problem."""
+    errors = []
+    try:
+        tokens = load_inventory(snapshot)
+    except SchemaError as exc:
+        errors += exc.errors
+    try:
+        workflows = load_workflows(snapshot)
+    except SchemaError as exc:
+        errors += exc.errors
+    if errors:
+        raise SchemaError(errors)
+    return tokens, workflows
+
+
+def list_content_files(snapshot: Path) -> list[str]:
     """Return sorted relative paths (as 'app/env.txt' strings) of scannable files."""
     files = []
     for dirname in SCANNED_DIRS:
@@ -147,7 +219,11 @@ def list_content_files(snapshot: Path) -> list:
     return sorted(files)
 
 
-def values_longest_first(tokens: dict) -> list:
+# ---------------------------------------------------------------------------
+# Token matching and redaction
+# ---------------------------------------------------------------------------
+
+def values_longest_first(tokens: Tokens) -> list[tuple[str, str]]:
     """(value, token_id) pairs, longest value first so a value that contains
     another value is matched (and redacted) as the longer one."""
     pairs = [(info["value"], token_id) for token_id, info in tokens.items()
@@ -155,7 +231,7 @@ def values_longest_first(tokens: dict) -> list:
     return sorted(pairs, key=lambda p: len(p[0]), reverse=True)
 
 
-def inventory_warnings(tokens: dict) -> list:
+def inventory_warnings(tokens: Tokens) -> list[dict]:
     """Inventory entries that cannot be matched safely (blank value).
 
     A blank value would match every line, so it is excluded from S1 and
@@ -173,14 +249,95 @@ def inventory_warnings(tokens: dict) -> list:
     ]
 
 
-def redact(text: str, tokens: dict) -> str:
+def redact(text: str, tokens: Tokens) -> str:
     """Replace every known token value with [REDACTED:<token_id>]."""
     for value, token_id in values_longest_first(tokens):
         text = text.replace(value, f"[REDACTED:{token_id}]")
     return text
 
 
-def scan_text(snapshot: Path, tokens: dict, files: list) -> tuple:
+# ---------------------------------------------------------------------------
+# Record builders: the explanation text for each rule
+# ---------------------------------------------------------------------------
+
+def s1_record(rel_path: str, line_no: int, token_id: str, state: str,
+              evidence: str, sensitive: bool) -> Record:
+    if sensitive:
+        rationale = (f"Token '{token_id}' is {state} and appears in plaintext; "
+                     "filename or directory does not exempt it.")
+        next_action = (f"Rotate '{token_id}' now (the exposed value must be treated as "
+                       f"compromised), then remove it from {rel_path}:{line_no} and git history.")
+    else:
+        rationale = (f"Token '{token_id}' is {state}; it does not represent a "
+                     "current credential exposure, so S1 is suppressed.")
+        next_action = "None required; optionally tidy the marker."
+    return Record(rule_id="S1", kind="text", path=rel_path, line=line_no, token_id=token_id,
+                  token_state=state, evidence=evidence, rationale=rationale, next_action=next_action)
+
+
+def ci_record(rule_id: str, wf: Workflow, evidence: dict, rationale: str, next_action: str) -> Record:
+    return Record(rule_id=rule_id, kind="ci", workflow_id=wf["workflow_id"], evidence=evidence,
+                  rationale=rationale, next_action=next_action)
+
+
+def s2_record(wf: Workflow, sensitive_refs: list[str]) -> Record:
+    return ci_record(
+        "S2", wf,
+        {"runs_untrusted_code": True, "trigger": wf["trigger"], "active_secret_refs": sensitive_refs},
+        "Workflow runs untrusted code while active secrets are available to it. "
+        "This is unsafe availability; it does not prove the secret was exfiltrated.",
+        f"Remove {', '.join(sensitive_refs)} from '{wf['workflow_id']}' or stop running untrusted code in it; "
+        "move secret use to a trusted (tag) workflow.",
+    )
+
+
+def s3_record(wf: Workflow) -> Record:
+    perm = wf["permissions"]
+    why = (f"{PERM_WRITE_ALL} is never permitted." if perm == PERM_WRITE_ALL
+           else f"'{perm}' requires trigger={TRIGGER_TAG} and runs_untrusted_code=false.")
+    return ci_record(
+        "S3", wf,
+        {"permissions": perm, "trigger": wf["trigger"], "runs_untrusted_code": wf["runs_untrusted_code"]},
+        f"Permissions exceed policy: {why}",
+        f"Set '{wf['workflow_id']}' permissions to {PERM_READ_ONLY}.",
+    )
+
+
+def s4_record(wf: Workflow, sensitive_refs: list[str]) -> Record:
+    return ci_record(
+        "S4", wf,
+        {"log_environment": True, "active_secret_refs": sensitive_refs},
+        "Full environment logging would write the active secret values into build logs.",
+        f"Set log_environment=false on '{wf['workflow_id']}'; log only named non-secret variables.",
+    )
+
+
+def s5_record(wf: Workflow, pattern: str, matched: list[str]) -> Record:
+    return ci_record(
+        "S5", wf,
+        {"artifact_pattern": pattern, "matches_sensitive": matched},
+        f"Artifact pattern '{pattern}' publishes sensitive file(s) {', '.join(matched)}. "
+        "Unsafe even if the token currently inside is revoked: future values would be published.",
+        f"Replace '{pattern}' in '{wf['workflow_id']}' with explicit non-sensitive paths "
+        "(e.g. build/report.txt).",
+    )
+
+
+def unresolved_record(wf: Workflow, ref: str) -> dict:
+    return {
+        "kind": "unresolved_ref",
+        "workflow_id": wf["workflow_id"],
+        "secret_ref": ref,
+        "rationale": "secret_ref is not in inventory.json; state unknown, no credential assumed.",
+        "next_action": "Confirm what this ref names and add it to the inventory.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# S1: text scan
+# ---------------------------------------------------------------------------
+
+def scan_text(snapshot: Path, tokens: Tokens, files: list[str]) -> tuple[list[Record], list[Record]]:
     """S1: find exact token values in content files.
 
     Returns (findings, benign). Every match produces exactly one record:
@@ -199,50 +356,21 @@ def scan_text(snapshot: Path, tokens: dict, files: list) -> tuple:
                 # Blank out the match so a shorter value inside it is not re-matched.
                 remaining = remaining.replace(value, " " * len(value))
                 state = tokens[token_id]["state"]
-                record = {
-                    "rule_id": "S1",
-                    "kind": "text",
-                    "path": rel_path,
-                    "line": line_no,
-                    "token_id": token_id,
-                    "token_state": state,
-                    "evidence": redact(line.strip(), tokens),
-                }
-                if is_sensitive(state):
-                    record["rationale"] = (
-                        f"Token '{token_id}' is {state} and appears in plaintext; "
-                        "filename or directory does not exempt it."
-                    )
-                    record["next_action"] = (
-                        f"Rotate '{token_id}' now (the exposed value must be treated as "
-                        f"compromised), then remove it from {rel_path}:{line_no} and git history."
-                    )
-                    findings.append(record)
-                else:
-                    record["rationale"] = (
-                        f"Token '{token_id}' is {state}; it does not represent a "
-                        "current credential exposure, so S1 is suppressed."
-                    )
-                    record["next_action"] = "None required; optionally tidy the marker."
-                    benign.append(record)
+                sensitive = is_sensitive(state)
+                record = s1_record(rel_path, line_no, token_id, state,
+                                   redact(line.strip(), tokens), sensitive)
+                (findings if sensitive else benign).append(record)
     return findings, benign
 
 
-def ci_record(rule_id: str, wf: dict, evidence: dict, rationale: str, next_action: str) -> dict:
-    return {
-        "rule_id": rule_id,
-        "kind": "ci",
-        "workflow_id": wf["workflow_id"],
-        "evidence": evidence,
-        "rationale": rationale,
-        "next_action": next_action,
-    }
+# ---------------------------------------------------------------------------
+# S2-S5: CI checks
+# ---------------------------------------------------------------------------
 
-
-def resolve_refs(wf: dict, tokens: dict) -> tuple:
+def resolve_refs(wf: Workflow, tokens: Tokens) -> tuple[list[str], list[str], list[str]]:
     """Split a workflow's secret_refs into (sensitive, non_sensitive, unknown)."""
     sensitive, non_sensitive, unknown = [], [], []
-    for ref in wf.get("secret_refs", []):
+    for ref in wf["secret_refs"]:
         if ref not in tokens:
             unknown.append(ref)
         elif is_sensitive(tokens[ref]["state"]):
@@ -252,151 +380,104 @@ def resolve_refs(wf: dict, tokens: dict) -> tuple:
     return sensitive, non_sensitive, unknown
 
 
-def check_s2(wf: dict, tokens: dict) -> list:
+def check_s2(wf: Workflow, sensitive_refs: list[str]) -> list[Record]:
     """S2: untrusted code with any active secret available."""
-    sensitive, _, _ = resolve_refs(wf, tokens)
-    if wf.get("runs_untrusted_code") is True and sensitive:
-        return [ci_record(
-            "S2", wf,
-            {"runs_untrusted_code": True, "trigger": wf.get("trigger"), "active_secret_refs": sensitive},
-            "Workflow runs untrusted code while active secrets are available to it. "
-            "This is unsafe availability; it does not prove the secret was exfiltrated.",
-            f"Remove {', '.join(sensitive)} from '{wf['workflow_id']}' or stop running untrusted code in it; "
-            "move secret use to a trusted (tag) workflow.",
-        )]
+    if wf["runs_untrusted_code"] is True and sensitive_refs:
+        return [s2_record(wf, sensitive_refs)]
     return []
 
 
-def permission_allowed(wf: dict) -> bool:
+def permission_allowed(wf: Workflow) -> bool:
     """S3 policy: read-only always; release-write only for tag + no untrusted code."""
-    perm = wf.get("permissions")
-    if perm == "read-only":
+    perm = wf["permissions"]
+    if perm == PERM_READ_ONLY:
         return True
-    if perm == "release-write":
-        return wf.get("trigger") == "tag" and wf.get("runs_untrusted_code") is False
+    if perm == PERM_RELEASE_WRITE:
+        return wf["trigger"] == TRIGGER_TAG and wf["runs_untrusted_code"] is False
     return False  # write-all, or anything unrecognised
 
 
-def check_s3(wf: dict) -> list:
+def check_s3(wf: Workflow) -> list[Record]:
+    """S3: permissions beyond what the policy allows for this trigger."""
     if permission_allowed(wf):
         return []
-    perm = wf.get("permissions")
-    why = ("write-all is never permitted." if perm == "write-all"
-           else f"'{perm}' requires trigger=tag and runs_untrusted_code=false.")
-    return [ci_record(
-        "S3", wf,
-        {"permissions": perm, "trigger": wf.get("trigger"),
-         "runs_untrusted_code": wf.get("runs_untrusted_code")},
-        f"Permissions exceed policy: {why}",
-        f"Set '{wf['workflow_id']}' permissions to read-only.",
-    )]
+    return [s3_record(wf)]
 
 
-def check_s4(wf: dict, tokens: dict) -> list:
+def check_s4(wf: Workflow, sensitive_refs: list[str]) -> list[Record]:
     """S4: full environment logging while any active secret is present."""
-    sensitive, _, _ = resolve_refs(wf, tokens)
-    if wf.get("log_environment") is True and sensitive:
-        return [ci_record(
-            "S4", wf,
-            {"log_environment": True, "active_secret_refs": sensitive},
-            "Full environment logging would write the active secret values into build logs.",
-            f"Set log_environment=false on '{wf['workflow_id']}'; log only named non-secret variables.",
-        )]
+    if wf["log_environment"] is True and sensitive_refs:
+        return [s4_record(wf, sensitive_refs)]
     return []
 
 
-def check_s5(wf: dict, files: list, sensitive_paths: tuple) -> list:
+def check_s5(wf: Workflow, files: list[str], sensitive_paths: tuple[str, ...]) -> list[Record]:
     """S5: an artifact pattern that expands to a configured sensitive file."""
     records = []
-    for pattern in wf.get("artifact_paths", []):
+    for pattern in wf["artifact_paths"]:
         matched = [f for f in files if fnmatchcase(f, pattern) and f in sensitive_paths]
         if matched:
-            records.append(ci_record(
-                "S5", wf,
-                {"artifact_pattern": pattern, "matches_sensitive": matched},
-                f"Artifact pattern '{pattern}' publishes sensitive file(s) {', '.join(matched)}. "
-                "Unsafe even if the token currently inside is revoked: future values would be published.",
-                f"Replace '{pattern}' in '{wf['workflow_id']}' with explicit non-sensitive paths "
-                "(e.g. build/report.txt).",
-            ))
+            records.append(s5_record(wf, pattern, matched))
     return records
 
 
-def check_ci(workflows: list, tokens: dict, files: list, sensitive_paths: tuple) -> tuple:
+def ci_benign(wf: Workflow, sensitive_refs: list[str], non_sensitive_refs: list[str]) -> list[Record]:
+    """Benign decisions worth showing: the release-write exception, active
+    secrets held by a workflow that is otherwise safe, and stale refs."""
+    benign = []
+    if wf["permissions"] == PERM_RELEASE_WRITE and permission_allowed(wf):
+        benign.append(ci_record(
+            "S3", wf,
+            {"permissions": PERM_RELEASE_WRITE, "trigger": TRIGGER_TAG, "runs_untrusted_code": False},
+            f"{PERM_RELEASE_WRITE} is the policy exception for trigger={TRIGGER_TAG} with no untrusted code.",
+            "None required.",
+        ))
+    if sensitive_refs and wf["runs_untrusted_code"] is False and wf["log_environment"] is False:
+        benign.append(ci_record(
+            "S2/S4", wf,
+            {"active_secret_refs": sensitive_refs, "runs_untrusted_code": False, "log_environment": False},
+            "Active secret is used by a trusted workflow that does not log the environment.",
+            "None required.",
+        ))
+    if non_sensitive_refs:
+        benign.append(ci_record(
+            "S2/S4", wf,
+            {"non_sensitive_secret_refs": non_sensitive_refs},
+            "Referenced secrets are revoked/test only; not a current exposure.",
+            "Optionally remove stale refs.",
+        ))
+    return benign
+
+
+def check_ci(workflows: list[Workflow], tokens: Tokens, files: list[str],
+             sensitive_paths: tuple[str, ...]) -> tuple[list[Record], list[Record], list[dict]]:
     """Run S2-S5 on every workflow. Returns (findings, benign, unresolved)."""
     findings, benign, unresolved = [], [], []
     for wf in workflows:
-        findings += check_s2(wf, tokens)
+        sensitive_refs, non_sensitive_refs, unknown_refs = resolve_refs(wf, tokens)
+        findings += check_s2(wf, sensitive_refs)
         findings += check_s3(wf)
-        findings += check_s4(wf, tokens)
+        findings += check_s4(wf, sensitive_refs)
         findings += check_s5(wf, files, sensitive_paths)
-
-        sensitive, non_sensitive, unknown = resolve_refs(wf, tokens)
-        for ref in unknown:
-            unresolved.append({
-                "kind": "unresolved_ref",
-                "workflow_id": wf["workflow_id"],
-                "secret_ref": ref,
-                "rationale": "secret_ref is not in inventory.json; state unknown, no credential assumed.",
-                "next_action": "Confirm what this ref names and add it to the inventory.",
-            })
-
-        # Benign decisions worth showing: the release-write exception, and
-        # active secrets held by a workflow that is otherwise safe.
-        if wf.get("permissions") == "release-write" and permission_allowed(wf):
-            benign.append(ci_record(
-                "S3", wf,
-                {"permissions": "release-write", "trigger": "tag", "runs_untrusted_code": False},
-                "release-write is the policy exception for trigger=tag with no untrusted code.",
-                "None required.",
-            ))
-        if sensitive and wf.get("runs_untrusted_code") is False and wf.get("log_environment") is False:
-            benign.append(ci_record(
-                "S2/S4", wf,
-                {"active_secret_refs": sensitive, "runs_untrusted_code": False, "log_environment": False},
-                "Active secret is used by a trusted workflow that does not log the environment.",
-                "None required.",
-            ))
-        if non_sensitive:
-            benign.append(ci_record(
-                "S2/S4", wf,
-                {"non_sensitive_secret_refs": non_sensitive},
-                "Referenced secrets are revoked/test only; not a current exposure.",
-                "Optionally remove stale refs.",
-            ))
+        unresolved += [unresolved_record(wf, ref) for ref in unknown_refs]
+        benign += ci_benign(wf, sensitive_refs, non_sensitive_refs)
     return findings, benign, unresolved
 
 
-def location(record: dict) -> str:
-    if record.get("kind") == "text":
-        return f"{record['path']}:{record['line']}"
-    return f"workflow:{record['workflow_id']}"
+# ---------------------------------------------------------------------------
+# Report
+# ---------------------------------------------------------------------------
 
-
-def audit(snapshot: Path, sensitive_paths: tuple = DEFAULT_SENSITIVE_PATHS) -> dict:
-    """Run every rule on a snapshot and return the machine-readable report."""
-    # Validate both inputs before raising, so one run reports every problem.
-    errors = []
-    try:
-        tokens = load_inventory(snapshot)
-    except SchemaError as exc:
-        errors += exc.errors
-    try:
-        workflows = load_workflows(snapshot)
-    except SchemaError as exc:
-        errors += exc.errors
-    if errors:
-        raise SchemaError(errors)
+def build_report(snapshot: Path, tokens: Tokens, workflows: list[Workflow],
+                 sensitive_paths: tuple[str, ...]) -> dict:
+    """Run every rule on loaded inputs and return the machine-readable report."""
     files = list_content_files(snapshot)
-
     warnings = inventory_warnings(tokens)
     text_findings, text_benign = scan_text(snapshot, tokens, files)
-    ci_findings, ci_benign, unresolved = check_ci(workflows, tokens, files, sensitive_paths)
+    ci_findings, ci_benign_records, unresolved = check_ci(workflows, tokens, files, sensitive_paths)
 
-    findings = text_findings + ci_findings
-    benign = text_benign + ci_benign
-    for record in findings + benign:
-        record["location"] = location(record)
+    findings = [r.to_dict() for r in text_findings + ci_findings]
+    benign = [r.to_dict() for r in text_benign + ci_benign_records]
 
     by_rule = {}
     for record in findings:
@@ -422,14 +503,21 @@ def audit(snapshot: Path, sensitive_paths: tuple = DEFAULT_SENSITIVE_PATHS) -> d
     }
 
 
-def assert_no_token_values(serialized: str, snapshot: Path) -> None:
+def audit(snapshot: Path, sensitive_paths: tuple[str, ...] = DEFAULT_SENSITIVE_PATHS) -> dict:
+    """Load, validate and audit a snapshot directory; return the report."""
+    tokens, workflows = load_snapshot(snapshot)
+    return build_report(snapshot, tokens, workflows, sensitive_paths)
+
+
+def assert_no_token_values(serialized: str, tokens: Tokens) -> None:
     """Safety net: refuse to emit output that contains any full token value."""
-    for token_id, info in load_inventory(snapshot).items():
+    for token_id, info in tokens.items():
         if info["value"].strip() and info["value"] in serialized:
             raise RuntimeError(f"refusing to output unredacted value of '{token_id}'")
 
 
-def format_evidence(evidence) -> str:
+def format_evidence(evidence: str | dict) -> str:
+    """Evidence as one line: text as-is, CI evidence as key=value pairs."""
     if isinstance(evidence, str):
         return evidence
     parts = []
@@ -441,6 +529,7 @@ def format_evidence(evidence) -> str:
 
 
 def format_summary(report: dict) -> str:
+    """Readable summary of a report: findings, benign decisions, unresolved refs, warnings."""
     s = report["summary"]
     by_rule = " ".join(f"{k}:{v}" for k, v in s["findings_by_rule"].items()) or "none"
     lines = [
@@ -455,9 +544,9 @@ def format_summary(report: dict) -> str:
         "FINDINGS",
     ]
 
-    def block(record: dict) -> list:
+    def block(record: dict) -> list[str]:
         head = f"[{record['rule_id']}] {record['location']}"
-        if record.get("kind") == "text":
+        if record["kind"] == "text":
             head += f"  token_id={record['token_id']} ({record['token_state']})"
         return [
             head,
@@ -488,7 +577,13 @@ def format_summary(report: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def main(argv=None) -> int:
+# ---------------------------------------------------------------------------
+# Command line
+# ---------------------------------------------------------------------------
+
+def main(argv: list[str] | None = None) -> int:
+    """Command-line entry point. Returns the exit code (0 ok, 1 findings with
+    --fail-on-findings, 2 unusable input)."""
     parser = argparse.ArgumentParser(description="Audit a PineBuild snapshot directory.")
     parser.add_argument("snapshot", type=Path, help="path to a snapshot directory")
     parser.add_argument(
@@ -508,15 +603,16 @@ def main(argv=None) -> int:
         return 2
 
     try:
-        report = audit(snapshot, sensitive_paths)
+        tokens, workflows = load_snapshot(snapshot)
     except SchemaError as exc:
         print(f"error: {snapshot} does not match the audit schema:", file=sys.stderr)
         for problem in exc.errors:
             print(f"  - {problem}", file=sys.stderr)
         return 2
+    report = build_report(snapshot, tokens, workflows, sensitive_paths)
     report_json = json.dumps(report, indent=2) + "\n"
     summary = format_summary(report)
-    assert_no_token_values(report_json + summary, snapshot)
+    assert_no_token_values(report_json + summary, tokens)
 
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
