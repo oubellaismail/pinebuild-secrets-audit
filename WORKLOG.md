@@ -56,3 +56,5 @@ The first version of the mutation check was a shell loop that cleaned up with `r
 ## Next step
 
 Add a third synthetic snapshot (the optional stretch), for example one with an unknown `secret_ref`, a nested `app/config/env.txt` and a non-default sensitive path, to demonstrate auditing new content end to end with no source changes.
+
+**Code layout decision.** `audit.py` is deliberately kept as one file (about 690 lines in labelled sections). The README frames the task as a small script with one command, everything in it serves one job and changes together, and a reviewer can read it top to bottom. If it grows past roughly 1,000–1,500 lines, or parts need to be reused or changed independently, the section headers are the planned module boundaries: `records.py`, `loading.py`, `rules.py`, `report.py`, `cli.py`, with `audit.py` kept as a thin wrapper so the command does not change.
