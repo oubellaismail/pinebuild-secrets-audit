@@ -1,3 +1,9 @@
+test_error_messages_never_contain_token_values (test_audit.TestInputValidation.test_error_messages_never_contain_token_values) ... ok
+test_errors_from_both_files_reported_in_one_run (test_audit.TestInputValidation.test_errors_from_both_files_reported_in_one_run) ... ok
+test_malformed_json_is_clear_error (test_audit.TestInputValidation.test_malformed_json_is_clear_error) ... ok
+test_missing_field_is_reported (test_audit.TestInputValidation.test_missing_field_is_reported) ... ok
+test_string_flag_is_rejected_not_passed (test_audit.TestInputValidation.test_string_flag_is_rejected_not_passed) ... ok
+test_unknown_trigger_and_permission_rejected_together (test_audit.TestInputValidation.test_unknown_trigger_and_permission_rejected_together) ... ok
 test_active_token_in_test_file_is_finding_with_line_and_redaction (test_audit.TestS1ActiveTextDetection.test_active_token_in_test_file_is_finding_with_line_and_redaction) ... ok
 test_blank_inventory_value_is_warning_not_match (test_audit.TestS1ActiveTextDetection.test_blank_inventory_value_is_warning_not_match) ... ok
 test_dotfile_is_scanned_but_os_metadata_is_not (test_audit.TestS1ActiveTextDetection.test_dotfile_is_scanned_but_os_metadata_is_not) ... ok
@@ -23,6 +29,6 @@ test_snapshot_one (test_audit.TestSuppliedSnapshots.test_snapshot_one) ... ok
 test_snapshot_two_rotation_did_not_fix_everything (test_audit.TestSuppliedSnapshots.test_snapshot_two_rotation_did_not_fix_everything) ... ok
 
 ----------------------------------------------------------------------
-Ran 23 tests in 0.058s
+Ran 29 tests in 0.070s
 
 OK

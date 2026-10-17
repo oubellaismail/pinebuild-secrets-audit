@@ -15,6 +15,7 @@ MUTANTS = {
         'if wf.get("runs_untrusted_code") is True and sensitive:',
         'if wf.get("runs_untrusted_code") is True and wf.get("secret_refs"):'),
     "redaction disabled": ('text = text.replace(value, f"[REDACTED:{token_id}]")', "pass"),
+    "CI schema validation skipped": ("    errors = validate_ci(data)\n", "    errors = []\n"),
 }
 for name, (old, new) in MUTANTS.items():
     assert old in src, name

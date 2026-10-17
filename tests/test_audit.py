@@ -13,7 +13,7 @@ import json
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -244,6 +244,66 @@ class TestS2S4SecretIntersection(SnapshotCase):
         self.assertEqual(rules, [])
         self.assertEqual([(u["workflow_id"], u["secret_ref"]) for u in report["unresolved_refs"]],
                          [("wf", "ghost")])
+
+
+class TestInputValidation(SnapshotCase):
+    """Malformed input is rejected with a clear message and exit 2, never
+    silently passed. Before validation, runs_untrusted_code="true" gave no S2."""
+
+    TOKENS = {"k": ("DEMO_ACTIVE_V", ACTIVE)}
+
+    def cli(self, root: Path) -> tuple:
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = audit.main([str(root)])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_string_flag_is_rejected_not_passed(self):
+        root = self.make_snapshot(self.TOKENS, [workflow(runs_untrusted_code="true", secret_refs=["k"])], {})
+        with self.assertRaises(audit.SchemaError) as ctx:
+            audit.audit(root)
+        self.assertEqual(ctx.exception.errors,
+                         ["ci.json: workflow 'wf': runs_untrusted_code must be true or false (found str)"])
+        code, out, err = self.cli(root)
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")  # no partial report
+
+    def test_unknown_trigger_and_permission_rejected_together(self):
+        root = self.make_snapshot({}, [workflow(trigger="push", permissions="admin")], {})
+        code, _, err = self.cli(root)
+        self.assertEqual(code, 2)
+        self.assertIn("trigger must be one of pull_request, tag", err)
+        self.assertIn("permissions must be one of read-only, release-write, write-all", err)
+
+    def test_missing_field_is_reported(self):
+        wf = workflow()
+        del wf["log_environment"]
+        root = self.make_snapshot({}, [wf], {})
+        self.assertIn("log_environment must be true or false (found missing)", self.cli(root)[2])
+
+    def test_malformed_json_is_clear_error(self):
+        root = self.make_snapshot({}, [], {})
+        (root / "ci.json").write_text("{not json")
+        code, _, err = self.cli(root)
+        self.assertEqual(code, 2)
+        self.assertIn("ci.json: invalid JSON", err)
+        self.assertNotIn("Traceback", err)
+
+    def test_errors_from_both_files_reported_in_one_run(self):
+        root = self.make_snapshot({}, [workflow(trigger="push")], {})
+        (root / "inventory.json").write_text(json.dumps({"tokens": [{"token_id": "k", "value": 5, "state": ACTIVE}]}))
+        code, _, err = self.cli(root)
+        self.assertEqual(code, 2)
+        self.assertIn("inventory.json: tokens[0].value must be a string", err)
+        self.assertIn("workflow 'wf': trigger must be one of", err)
+
+    def test_error_messages_never_contain_token_values(self):
+        root = self.make_snapshot({}, [], {})
+        (root / "inventory.json").write_text(json.dumps({"tokens": [
+            {"token_id": "k", "value": "DEMO_ACTIVE_V", "state": 3}]}))
+        code, out, err = self.cli(root)
+        self.assertEqual(code, 2)
+        self.assertNotIn("DEMO_ACTIVE_V", out + err)
 
 
 class TestSuppliedSnapshots(unittest.TestCase):

@@ -12,8 +12,8 @@ Date: 2026-10-16.
 ## Key decisions
 
 - **Unknown token states are treated as sensitive.** The policy names three states. Only `revoked_in_fixture` and `test_only` are explicitly harmless, so any other state fails closed rather than silently passing.
-- **Strict booleans.** Flags are checked with `is True` / `is False`, so a malformed value such as `"yes"` cannot satisfy the S3 `release-write` exception.
-- **Unknown permissions fail S3.** Only `read-only` and the defined `release-write` exception pass.
+- **Schema validation before any rule.** Malformed input (invalid JSON, non-boolean flags, unknown `trigger`/`permissions`, missing fields, duplicate ids) stops the audit with every problem listed and exit code 2. A partial audit of broken input could look clean when it is not.
+- **Defensive rule code stays fail-closed.** Even after validation, S3 only passes `read-only` and the exact `release-write` exception, and flags are compared with `is True` / `is False`.
 - **Dotfiles are scanned.** Only OS metadata (`.DS_Store`, `Thumbs.db`) is skipped; `app/.env`-style files are exactly where real secrets end up.
 - **Blank inventory values are not matched** (an empty string is "in" every line) and are reported as inventory warnings instead.
 - **Next actions say rotate first, then clean up**, because deleting a leaked value does not un-expose it.
@@ -32,11 +32,12 @@ The first version of the mutation check was a shell loop that cleaned up with `r
 
 ## Validation and refinement
 
-- **Validation (mutation check).** All tests passed on their first run, which on its own does not prove they test anything. The mutation check plants five bugs, one at a time, in temp copies of `audit.py`: S3 ignoring `runs_untrusted_code`, S1 flagging every state, S5 without wildcards, S2 counting revoked refs, redaction disabled. All five were caught ([output/mutation_check.txt](output/mutation_check.txt)).
+- **Validation (mutation check).** All tests passed on their first run, which on its own does not prove they test anything. The mutation check plants bugs, one at a time, in temp copies of `audit.py`: S3 ignoring `runs_untrusted_code`, S1 flagging every state, S5 without wildcards, S2 counting revoked refs, redaction disabled, and (added later) CI schema validation skipped. All six are caught ([output/mutation_check.txt](output/mutation_check.txt)).
 - **Validation (hand results).** The auditor output for both snapshots matches the findings worked out by hand from the raw files before coding.
 - **Validation (redaction and reproducibility).** `grep -c DEMO_` over every output file returns 0. Two consecutive runs produce byte-identical JSON.
 - **Refinement.** The first summary printed Python list syntax in messages (`Remove ['release-active'] from ...`). Changed to plain comma-joined text.
 - **Refinement (self-review, 2026-10-17).** Probing the finished auditor with inputs the tests never used found two gaps: an active token in `app/.env` produced **0 findings** (the scanner skipped every dotfile, not just `.DS_Store`), and a blank inventory value matched every line with garbled evidence. Both were fixed, and the rotation advice was reordered to rotate first. Four new tests cover this; all four **fail on the previous commit and pass now**. Suite: 23 tests, mutation check still 5/5 caught.
+- **Refinement (input validation, 2026-10-17).** A second probe found that `"runs_untrusted_code": "true"` (a string) with an active secret produced **no S2**: `is True` made S3 fail closed but let S2/S4 fail open, contradicting this log's earlier "strict booleans" claim. Broken JSON also crashed with a traceback and exit 1, which the docs reserve for "findings exist". Added schema validation with clear errors and exit 2. Six new tests; all six **fail on the previous commit and pass now**. Suite: 29 tests, mutation check 6/6 caught.
 - **Refinement.** Added `assert_no_token_values`, a final check that refuses to write any output containing a full inventory value, as a safety net beyond per-line redaction.
 
 ## Limits

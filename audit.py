@@ -33,9 +33,92 @@ def is_sensitive(state: str) -> bool:
     return state not in NON_SENSITIVE_STATES
 
 
+# Allowed CI values from the policy. Anything else is a schema error, so a
+# malformed flag such as "true" (a string) cannot silently pass S2/S4.
+TRIGGERS = ("pull_request", "tag")
+PERMISSIONS = ("read-only", "release-write", "write-all")
+BOOLEAN_FIELDS = ("runs_untrusted_code", "log_environment")
+STRING_LIST_FIELDS = ("secret_refs", "artifact_paths")
+
+
+class SchemaError(Exception):
+    """Input does not match the assessment schema; carries every problem found."""
+
+    def __init__(self, errors: list):
+        self.errors = errors
+        super().__init__("; ".join(errors))
+
+
+def read_json(path: Path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SchemaError([f"{path.name}: invalid JSON ({exc.msg} at line {exc.lineno}, column {exc.colno})"])
+    except UnicodeDecodeError:
+        raise SchemaError([f"{path.name}: not valid UTF-8 text"])
+
+
+def validate_inventory(data) -> list:
+    """Return schema errors for inventory.json. Messages never include token values."""
+    if not isinstance(data, dict) or not isinstance(data.get("tokens"), list):
+        return ["inventory.json: expected an object with a 'tokens' list"]
+    errors, seen = [], set()
+    for i, entry in enumerate(data["tokens"]):
+        where = f"inventory.json: tokens[{i}]"
+        if not isinstance(entry, dict):
+            errors.append(f"{where} must be an object")
+            continue
+        token_id = entry.get("token_id")
+        if not isinstance(token_id, str) or not token_id:
+            errors.append(f"{where}.token_id must be a non-empty string")
+        elif token_id in seen:
+            errors.append(f"{where}.token_id '{token_id}' is duplicated")
+        else:
+            seen.add(token_id)
+        for field in ("value", "state"):
+            if not isinstance(entry.get(field), str):
+                errors.append(f"{where}.{field} must be a string")
+    return errors
+
+
+def validate_ci(data) -> list:
+    """Return schema errors for ci.json."""
+    if not isinstance(data, dict) or not isinstance(data.get("workflows"), list):
+        return ["ci.json: expected an object with a 'workflows' list"]
+    errors, seen = [], set()
+    for i, wf in enumerate(data["workflows"]):
+        if not isinstance(wf, dict):
+            errors.append(f"ci.json: workflows[{i}] must be an object")
+            continue
+        wf_id = wf.get("workflow_id")
+        if not isinstance(wf_id, str) or not wf_id:
+            errors.append(f"ci.json: workflows[{i}].workflow_id must be a non-empty string")
+            wf_id = f"workflows[{i}]"
+        elif wf_id in seen:
+            errors.append(f"ci.json: workflow_id '{wf_id}' is duplicated")
+        seen.add(wf_id)
+        where = f"ci.json: workflow '{wf_id}'"
+        if wf.get("trigger") not in TRIGGERS:
+            errors.append(f"{where}: trigger must be one of {', '.join(TRIGGERS)}")
+        if wf.get("permissions") not in PERMISSIONS:
+            errors.append(f"{where}: permissions must be one of {', '.join(PERMISSIONS)}")
+        for field in BOOLEAN_FIELDS:
+            if not isinstance(wf.get(field), bool):
+                found = "missing" if field not in wf else type(wf[field]).__name__
+                errors.append(f"{where}: {field} must be true or false (found {found})")
+        for field in STRING_LIST_FIELDS:
+            value = wf.get(field)
+            if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+                errors.append(f"{where}: {field} must be a list of strings")
+    return errors
+
+
 def load_inventory(snapshot: Path) -> dict:
     """Return {token_id: {"value": ..., "state": ...}} from inventory.json."""
-    data = json.loads((snapshot / "inventory.json").read_text(encoding="utf-8"))
+    data = read_json(snapshot / "inventory.json")
+    errors = validate_inventory(data)
+    if errors:
+        raise SchemaError(errors)
     tokens = {}
     for entry in data["tokens"]:
         tokens[entry["token_id"]] = {"value": entry["value"], "state": entry["state"]}
@@ -44,7 +127,10 @@ def load_inventory(snapshot: Path) -> dict:
 
 def load_workflows(snapshot: Path) -> list:
     """Return the list of workflow dicts from ci.json."""
-    data = json.loads((snapshot / "ci.json").read_text(encoding="utf-8"))
+    data = read_json(snapshot / "ci.json")
+    errors = validate_ci(data)
+    if errors:
+        raise SchemaError(errors)
     return data["workflows"]
 
 
@@ -289,8 +375,18 @@ def location(record: dict) -> str:
 
 def audit(snapshot: Path, sensitive_paths: tuple = DEFAULT_SENSITIVE_PATHS) -> dict:
     """Run every rule on a snapshot and return the machine-readable report."""
-    tokens = load_inventory(snapshot)
-    workflows = load_workflows(snapshot)
+    # Validate both inputs before raising, so one run reports every problem.
+    errors = []
+    try:
+        tokens = load_inventory(snapshot)
+    except SchemaError as exc:
+        errors += exc.errors
+    try:
+        workflows = load_workflows(snapshot)
+    except SchemaError as exc:
+        errors += exc.errors
+    if errors:
+        raise SchemaError(errors)
     files = list_content_files(snapshot)
 
     warnings = inventory_warnings(tokens)
@@ -411,7 +507,13 @@ def main(argv=None) -> int:
         print(f"error: {snapshot} must contain inventory.json and ci.json", file=sys.stderr)
         return 2
 
-    report = audit(snapshot, sensitive_paths)
+    try:
+        report = audit(snapshot, sensitive_paths)
+    except SchemaError as exc:
+        print(f"error: {snapshot} does not match the audit schema:", file=sys.stderr)
+        for problem in exc.errors:
+            print(f"  - {problem}", file=sys.stderr)
+        return 2
     report_json = json.dumps(report, indent=2) + "\n"
     summary = format_summary(report)
     assert_no_token_values(report_json + summary, snapshot)
